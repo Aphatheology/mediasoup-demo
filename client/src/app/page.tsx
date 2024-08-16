@@ -61,7 +61,7 @@ export default function Home() {
         setSocket(socket);
         socket.on('connection-success', (data) => {
           console.log('oning camera')
-            startCamera();
+            // startCamera();
         });
         return () => {
             socket.disconnect();
@@ -374,6 +374,9 @@ export default function Home() {
                     gap: '20px',
                 }}
             >
+                <button onClick={startCamera}>
+                    Get Local Video
+                </button>
                 <button onClick={getRouterRtpCapabilities}>
                     Get Router RTP Capabilities
                 </button>
