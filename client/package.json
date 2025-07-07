@@ -3,17 +3,18 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --turbo",
+    "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
   },
   "dependencies": {
-    "mediasoup-client": "^3.6.103",
+    "mediasoup-client": "^3.12.4",
     "next": "14.0.1",
     "react": "^18",
     "react-dom": "^18",
-    "socket.io-client": "^4.7.2"
+    "react-icons": "^5.5.0",
+    "socket.io-client": "^4.7.5"
   },
   "devDependencies": {
     "@types/node": "^20",
