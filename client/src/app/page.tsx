@@ -92,7 +92,7 @@ export default function Home() {
         }
 
         const newSocket = io(
-            `${process.env.NEXT_PUBLIC_SERVER_URL}/mediasoup`,
+            `https://mediasoup-demo-server.onrender.com/mediasoup`,
             {
                 forceNew: true,
                 timeout: 20000,
