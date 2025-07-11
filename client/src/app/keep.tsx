@@ -56,7 +56,8 @@ export default function Home() {
      * On successful connection, the camera is started to obtain a media stream.
      */
     useEffect(() => {
-        const socket = io(`${process.env.NEXT_PUBLIC_SERVER_URL}/mediasoup`);
+        // const socket = io(`${process.env.NEXT_PUBLIC_SERVER_URL}/mediasoup`);
+        const socket = io('http://192.168.1.108:4000/mediasoup');
 
         setSocket(socket);
         socket.on('connection-success', (data) => {

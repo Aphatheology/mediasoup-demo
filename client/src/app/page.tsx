@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+// import { css } from "@emotion/css";
 import { io } from 'socket.io-client';
 import { Device } from 'mediasoup-client';
 import {
@@ -8,39 +9,41 @@ import {
     IceCandidate,
     IceParameters,
     Transport,
-    RtpCapabilities,
-    Producer,
-    Consumer,
 } from 'mediasoup-client/types';
 
 export default function Home() {
+    /**
+     * References to the local and remote video HTML elements.
+     * These refs are used to attach media streams to the video elements for playback.
+     */
     const videoRef = useRef<HTMLVideoElement | null>(null);
     const remoteVideosRef = useRef<{ [peerId: string]: HTMLVideoElement }>({});
-    const initializingRef = useRef(false); // Prevent double initialization
-    const joiningRef = useRef(false); // Prevent double joining
 
+    // Room and peer management
     const [roomId, setRoomId] = useState<string>('');
     const [peerId, setPeerId] = useState<string>('');
     const [isJoined, setIsJoined] = useState<boolean>(false);
-    const [isConnecting, setIsConnecting] = useState<boolean>(false);
     const [remotePeers, setRemotePeers] = useState<string[]>([]);
-
-    // Media controls
-    const [videoMuted, setVideoMuted] = useState<boolean>(false);
-    const [audioMuted, setAudioMuted] = useState<boolean>(false);
-    const [currentStream, setCurrentStream] = useState<MediaStream | null>(
-        null
-    );
-    const [mediaInitialized, setMediaInitialized] = useState<boolean>(false);
-
+    
+    /**
+     * State to hold encoding parameters for the media stream.
+     * Encoding parameters control the quality and bandwidth usage of the transmitted video.
+     * Each object in the encoding array represents a different layer of encoding,
+     * allowing for scalable video coding (SVC). The parameters defined here are:
+     * - rid: The encoding layer identifier.
+     * - maxBitrate: The maximum bitrate for this layer.
+     * - scalabilityMode: The scalability mode which specifies the temporal and spatial scalability.
+     *
+     * Additionally, codecOptions are provided to control the initial bitrate.
+     */
     const [params, setParams] = useState({
         video: {
             encoding: [
-                { rid: 'r0', maxBitrate: 100000, scalabilityMode: 'S1T3' },
-                { rid: 'r1', maxBitrate: 300000, scalabilityMode: 'S1T3' },
-                { rid: 'r2', maxBitrate: 900000, scalabilityMode: 'S1T3' },
+                { rid: 'r0', maxBitrate: 100000, scalabilityMode: 'S1T3' }, // Lowest quality layer
+                { rid: 'r1', maxBitrate: 300000, scalabilityMode: 'S1T3' }, // Middle quality layer
+                { rid: 'r2', maxBitrate: 900000, scalabilityMode: 'S1T3' }, // Highest quality layer
             ],
-            codecOptions: { videoGoogleStartBitrate: 1000 },
+            codecOptions: { videoGoogleStartBitrate: 1000 }, // Initial bitrate
             track: null as MediaStreamTrack | null,
         },
         audio: {
@@ -48,510 +51,388 @@ export default function Home() {
         },
     });
 
-    const [device, setDevice] = useState<Device | null>(null);
-    const [socket, setSocket] = useState<any>(null);
-    const socketRef = useRef<any>(null);
-    const deviceRef = useRef<Device | null>(null); // Add device ref
-    const [rtpCapabilities, setRtpCapabilities] =
-        useState<RtpCapabilities | null>(null);
-    const [producerTransport, setProducerTransport] =
-        useState<Transport | null>(null);
-    const [consumerTransports, setConsumerTransports] = useState<{
-        [key: string]: Transport;
-    }>({});
-    const [producers, setProducers] = useState<{
-        video?: Producer;
-        audio?: Producer;
-    }>({});
-    const [setupComplete, setSetupComplete] = useState<boolean>(false);
+    /**
+     * State to hold references to various mediasoup client-side entities.
+     * These entities are crucial for managing the media transmission and reception.
+     */
+    const [device, setDevice] = useState<Device | null>(null); // mediasoup Device
+    const [socket, setSocket] = useState<any>(null); // Socket for signaling
+    const [rtpCapabilities, setRtpCapabilities] = useState<any>(null); // RTP Capabilities for the device
+    const [producerTransport, setProducerTransport] = useState<Transport | null>(null); // Transport for sending media
+    const [consumerTransports, setConsumerTransports] = useState<{ [key: string]: Transport }>({}); // Multiple consumer transports
+    const [producers, setProducers] = useState<{ video?: any; audio?: any }>({});
 
-    // Initialize media on component mount
+    /**
+     * Effect to initialize the socket connection on component mount.
+     * The socket is used for signaling to coordinate media transmission.
+     * On successful connection, the camera is started to obtain a media stream.
+     */
     useEffect(() => {
-        if (!initializingRef.current) {
-            initializingRef.current = true;
-            initializeMedia();
+        // Determine server URL based on environment
+        let serverUrl;
+        
+        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
+            // Local development
+            serverUrl = 'http://192.168.1.108:4000/mediasoup';
+        } else {
+            // Remote/production - for now use HTTP even from HTTPS (for testing)
+            // TODO: Set up proper HTTPS server with SSL certificates
+            serverUrl = 'http://192.168.1.108:4000/mediasoup';
         }
-    }, []);
-
-    useEffect(() => {
-        // Get roomId and peerId from URL params
-        const urlParams = new URLSearchParams(window.location.search);
-        const urlRoomId = urlParams.get('roomId') || '';
-        const urlPeerId = urlParams.get('peerId') || '';
-
-        setRoomId(urlRoomId);
-        setPeerId(urlPeerId);
-    }, []);
-
-    useEffect(() => {
-        if (!roomId || !peerId) return;
-
-        // Prevent multiple socket connections
-        if (socketRef.current) {
-            socketRef.current.disconnect();
-        }
-
-        const newSocket = io(
-            `https://mediasoup-demo-server.onrender.com/mediasoup`,
-            {
-                forceNew: true,
-                timeout: 20000,
-                transports: ['websocket', 'polling'],
-            }
-        );
-
-        setSocket(newSocket);
-        socketRef.current = newSocket;
-
-        newSocket.on('connection-success', (data) => {
-            console.log('Connected to server:', data);
+        
+        console.log('Connecting to:', serverUrl);
+        
+        const socket = io(serverUrl, {
+            forceNew: true,
+            timeout: 20000,
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionDelay: 1000,
+            reconnectionAttempts: 5,
         });
 
-        newSocket.on('peer-joined', (data) => {
+        setSocket(socket);
+        socket.on('connection-success', (data) => {
+            console.log('Connected to server');
+        });
+
+        // Listen for peer events
+        socket.on('peer-joined', (data) => {
             console.log('Peer joined:', data);
-            setRemotePeers((prev) => {
-                if (!prev.includes(data.peerId)) {
-                    return [...prev, data.peerId];
-                }
-                return prev;
-            });
+            setRemotePeers(prev => [...prev.filter(p => p !== data.peerId), data.peerId]);
         });
 
-        newSocket.on('peer-left', (data) => {
+        socket.on('peer-left', (data) => {
             console.log('Peer left:', data);
-            setRemotePeers((prev) => prev.filter((p) => p !== data.peerId));
-            cleanupRemotePeer(data.peerId);
-        });
-
-        newSocket.on('new-producer', async (data) => {
-            console.log('New producer available:', data);
-
-            // Wait a bit and then consume the new producer
-            setTimeout(async () => {
-                try {
-                    console.log(
-                        `Attempting to consume new ${data.kind} from ${data.producerPeerId}`
-                    );
-                    // Use deviceRef for immediate access
-                    await consumeMedia(
-                        data.producerPeerId,
-                        data.kind,
-                        deviceRef.current || undefined
-                    );
-                    console.log(
-                        `Successfully consumed new ${data.kind} from ${data.producerPeerId}`
-                    );
-                } catch (error) {
-                    console.error('Error consuming new producer:', error);
-                }
-            }, 1000);
-        });
-
-        // Cleanup function
-        return () => {
-            if (newSocket) {
-                newSocket.disconnect();
+            setRemotePeers(prev => prev.filter(p => p !== data.peerId));
+            // Clean up remote video element
+            const videoElement = remoteVideosRef.current[data.peerId];
+            if (videoElement) {
+                videoElement.remove();
+                delete remoteVideosRef.current[data.peerId];
             }
-        };
-    }, [roomId, peerId]); // Removed setupComplete and device from dependencies
+        });
 
-    const initializeMedia = async () => {
+        socket.on('new-producer', async (data) => {
+            console.log('New producer available:', data);
+            // Auto-consume new producers will be handled when getExistingProducers is called
+        });
+
+        socket.on('connect_error', (error) => {
+            console.error('Socket connection error:', error);
+        });
+
+        socket.on('disconnect', (reason) => {
+            console.log('Socket disconnected:', reason);
+        });
+
+        socket.on('reconnect', (attemptNumber) => {
+            console.log('Socket reconnected after', attemptNumber, 'attempts');
+        });
+
+        return () => {
+            socket.disconnect();
+        };
+    }, []); // Remove dependencies to prevent reconnection
+
+    /**
+     * Function to start the camera and obtain a media stream.
+     * This stream is then attached to the local video element for preview.
+     */
+    const startCamera = async () => {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
                 video: true,
                 audio: true,
             });
-
-            setCurrentStream(stream);
-            setMediaInitialized(true);
-
             if (videoRef.current) {
+            
+                const videoTrack = stream.getVideoTracks()[0];
+                const audioTrack = stream.getAudioTracks()[0];
+                
                 videoRef.current.srcObject = stream;
+                
+                setParams((current) => ({ 
+                    ...current, 
+                    video: { ...current.video, track: videoTrack },
+                    audio: { ...current.audio, track: audioTrack }
+                }));
             }
-
-            // Set up tracks
-            const videoTrack = stream.getVideoTracks()[0];
-            const audioTrack = stream.getAudioTracks()[0];
-
-            // Enable tracks by default (camera and mic ON)
-            if (videoTrack) {
-                videoTrack.enabled = true;
-                setVideoMuted(false); // Video is NOT muted by default
-            }
-            if (audioTrack) {
-                audioTrack.enabled = true;
-                setAudioMuted(false); // Audio is NOT muted by default
-            }
-
-            setParams((prev) => ({
-                ...prev,
-                video: { ...prev.video, track: videoTrack || null },
-                audio: { ...prev.audio, track: audioTrack || null },
-            }));
-
-            console.log(
-                'Media initialized - Camera and microphone are ON by default'
-            );
-            console.log('Video track enabled:', videoTrack?.enabled);
-            console.log('Audio track enabled:', audioTrack?.enabled);
         } catch (error) {
-            console.error('Error accessing media:', error);
+            console.error('Error accessing camera:', error);
         }
     };
 
-    const cleanupRemotePeer = (peerId: string) => {
-        const videoElement = remoteVideosRef.current[peerId];
-
-        if (videoElement) {
-            videoElement.srcObject = null;
-            videoElement.parentElement?.remove();
-            delete remoteVideosRef.current[peerId];
-        }
-    };
-
-    const toggleVideo = async () => {
-        if (!currentStream) return;
-
-        if (videoMuted) {
-            // Unmute: get new video track
-            try {
-                const newStream = await navigator.mediaDevices.getUserMedia({
-                    video: true,
-                    audio: false,
-                });
-
-                const newVideoTrack = newStream.getVideoTracks()[0];
-
-                // Replace the old track with new one
-                const oldVideoTrack = currentStream.getVideoTracks()[0];
-                if (oldVideoTrack) {
-                    currentStream.removeTrack(oldVideoTrack);
-                    oldVideoTrack.stop();
-                }
-
-                currentStream.addTrack(newVideoTrack);
-
-                // Update the video element
-                if (videoRef.current) {
-                    videoRef.current.srcObject = currentStream;
-                }
-
-                // Update params
-                setParams((prev) => ({
-                    ...prev,
-                    video: { ...prev.video, track: newVideoTrack },
-                }));
-
-                // Replace track in producer if it exists
-                if (producers.video && newVideoTrack) {
-                    await producers.video.replaceTrack({
-                        track: newVideoTrack,
-                    });
-                }
-
-                setVideoMuted(false);
-                console.log('Video unmuted and camera turned on');
-            } catch (error) {
-                console.error('Error turning on camera:', error);
-            }
-        } else {
-            // Mute: stop the video track to turn off camera light
-            const videoTrack = currentStream.getVideoTracks()[0];
-            if (videoTrack) {
-                videoTrack.stop(); // This will turn off the camera light
-                currentStream.removeTrack(videoTrack);
-
-                // Update params
-                setParams((prev) => ({
-                    ...prev,
-                    video: { ...prev.video, track: null },
-                }));
-
-                // Pause the producer
-                if (producers.video) {
-                    producers.video.pause();
-                }
-
-                setVideoMuted(true);
-                console.log('Video muted and camera turned off');
-            }
-        }
-    };
-
-    const toggleAudio = () => {
-        if (currentStream) {
-            const audioTrack = currentStream.getAudioTracks()[0];
-            if (audioTrack) {
-                if (audioMuted) {
-                    // Unmute: enable the track
-                    audioTrack.enabled = true;
-                    setAudioMuted(false);
-
-                    // Resume the producer
-                    if (producers.audio) {
-                        producers.audio.resume();
-                    }
-                } else {
-                    // Mute: disable the track
-                    audioTrack.enabled = false;
-                    setAudioMuted(true);
-
-                    // Pause the producer
-                    if (producers.audio) {
-                        producers.audio.pause();
-                    }
-                }
-            }
-        }
-    };
-
+    /**
+     * Join a room with room and peer IDs
+     */
     const joinRoom = async () => {
-        if (!socket || !roomId || !peerId || !mediaInitialized) {
-            console.log('Missing requirements for joining room:', {
-                socket: !!socket,
-                roomId: !!roomId,
-                peerId: !!peerId,
-                mediaInitialized,
-            });
-            return;
-        }
-
-        // Prevent double joining
-        if (joiningRef.current || isConnecting) {
-            console.log('Already joining room, skipping...');
-            return;
-        }
-
-        joiningRef.current = true;
-        setIsConnecting(true);
-
-        try {
-            // Step 1: Join room
-            console.log('Step 1: Joining room...');
-            const joinResponse = await new Promise<{
-                success: boolean;
-                peers: string[];
-            }>((resolve, reject) => {
-                socket.emit(
-                    'join-room',
-                    { roomId, peerId },
-                    (response: {
-                        success: boolean;
-                        peers: string[];
-                        error?: any;
-                    }) => {
-                        if (response.success) {
-                            setIsJoined(true);
-                            console.log(
-                                'Joined room successfully with peers:',
-                                response.peers
-                            );
-                            setRemotePeers(response.peers || []); // Set initial list of peers
-                            resolve(response);
-                        } else {
-                            console.error(
-                                'Failed to join room:',
-                                response.error
-                            );
-                            reject(response.error);
-                        }
-                    }
-                );
-            });
-
-            // Step 2: Get router capabilities
-            console.log('Step 2: Getting router capabilities...');
-            const rtpCaps = await new Promise<RtpCapabilities>(
-                (resolve, reject) => {
-                    socket.emit(
-                        'getRouterRtpCapabilities',
-                        { roomId },
-                        (data: any) => {
-                            if (data.error) {
-                                reject(data.error);
-                                return;
-                            }
-                            const capabilities =
-                                data.routerRtpCapabilities as RtpCapabilities;
-                            setRtpCapabilities(capabilities);
-                            console.log(
-                                'Got router RTP capabilities:',
-                                capabilities
-                            );
-                            resolve(capabilities);
-                        }
-                    );
-                }
-            );
-
-            // Step 3: Create device
-            console.log('Step 3: Creating device...');
-            const newDevice = new Device();
-            await newDevice.load({ routerRtpCapabilities: rtpCaps });
-            setDevice(newDevice);
-            deviceRef.current = newDevice; // Store in ref for immediate access
-            console.log('Device created and loaded');
-            console.log('Device RTP capabilities:', newDevice.rtpCapabilities);
-
-            // Step 4: Create send transport
-            console.log('Step 4: Creating send transport...');
-            const transport = await createSendTransport(newDevice);
-            setProducerTransport(transport);
-            console.log('Send transport created');
-
-            // Step 5: Produce media
-            console.log('Step 5: Producing media...');
-            const producePromises = [];
-            if (params.video.track) {
-                console.log('Producing video...');
-                producePromises.push(produceVideo(transport));
-            }
-            if (params.audio.track) {
-                console.log('Producing audio...');
-                producePromises.push(produceAudio(transport));
-            }
-            await Promise.all(producePromises);
-            console.log('Media production complete');
-
-            // Step 6: Setup complete, consume existing producers
-            console.log(
-                'Step 6: Setup complete, consuming existing producers...'
-            );
-            setSetupComplete(true);
-
-            // Longer delay to ensure all producers are registered and device is ready
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-
-            // Use the device directly instead of relying on state
-            await consumeAllExistingProducers(newDevice);
-
-            console.log('All setup complete!');
-        } catch (error) {
-            console.error('Error during setup:', error);
-            setIsJoined(false);
-            setSetupComplete(false);
-        } finally {
-            setIsConnecting(false);
-            joiningRef.current = false;
-        }
-    };
-
-    const createSendTransport = async (device: Device): Promise<Transport> => {
+        if (!socket || !roomId || !peerId) return;
+        
         return new Promise((resolve, reject) => {
-            socket.emit(
-                'createTransport',
-                { sender: true, roomId, peerId },
-                ({ params }: { params: any }) => {
-                    if (params.error) {
-                        reject(params.error);
-                        return;
-                    }
-
-                    const transport = device.createSendTransport(params);
-
-                    transport.on(
-                        'connect',
-                        async (
-                            { dtlsParameters }: any,
-                            callback: any,
-                            errback: any
-                        ) => {
-                            try {
-                                socket.emit('connectProducerTransport', {
-                                    dtlsParameters,
-                                    roomId,
-                                    peerId,
-                                });
-                                callback();
-                            } catch (error) {
-                                errback(error);
-                            }
-                        }
-                    );
-
-                    transport.on(
-                        'produce',
-                        async (
-                            parameters: any,
-                            callback: any,
-                            errback: any
-                        ) => {
-                            const { kind, rtpParameters } = parameters;
-                            try {
-                                socket.emit(
-                                    'transport-produce',
-                                    { kind, rtpParameters, roomId, peerId },
-                                    ({ id }: any) => {
-                                        callback({ id });
-                                    }
-                                );
-                            } catch (error) {
-                                errback(error);
-                            }
-                        }
-                    );
-
-                    resolve(transport);
+            socket.emit('join-room', { roomId, peerId }, (response: any) => {
+                if (response.success) {
+                    setIsJoined(true);
+                    setRemotePeers(response.peers || []);
+                    console.log('Joined room successfully');
+                    resolve(response);
+                } else {
+                    console.error('Failed to join room:', response.error);
+                    reject(response.error);
                 }
-            );
+            });
         });
     };
 
-    const produceVideo = async (transport: Transport) => {
-        if (!params.video.track) return;
+    /**
+     * Step 1: Retrieve the Router's RTP Capabilities.
+     * This function requests the router's RTP capabilities from the server,
+     * which are essential to configure the mediasoup Device.
+     * The router's RTP capabilities describe the codecs and RTP parameters supported by the router.
+     * This information is crucial for ensuring that the Device is compatible with the router.
+     */
+    const getRouterRtpCapabilities = async () => {
+        return new Promise((resolve, reject) => {
+            socket.emit('getRouterRtpCapabilities', { roomId }, (data: any) => {
+                console.log('Full response:', data);
+                if (data.error) {
+                    console.error('Error getting router capabilities:', data.error);
+                    reject(data.error);
+                    return;
+                }
+                setRtpCapabilities(data.routerRtpCapabilities);
+                console.log(
+                    'getRouterRtpCapabilities:',
+                    data.routerRtpCapabilities
+                );
+                resolve(data.routerRtpCapabilities);
+            });
+        });
+    };
 
+    /**
+     * Step 2: Create and Initialize the mediasoup Device.
+     * This function creates a new mediasoup Device instance and loads the router's RTP capabilities into it.
+     * The Device is a client-side entity that provides an API for managing sending/receiving media with a mediasoup server.
+     * Loading the router's RTP capabilities ensures that the Device is aware of the codecs and RTP parameters it needs to use
+     * to successfully send and receive media with the server.
+     *
+     * If the Device is unable to load the router's RTP capabilities (e.g., due to an unsupported browser),
+     * an error is logged to the console.
+     */
+    const createDevice = async () => {
         try {
-            const videoProducer = await transport.produce({
+            const newDevice = new Device();
+
+            await newDevice.load({ routerRtpCapabilities: rtpCapabilities });
+
+            setDevice(newDevice);
+        } catch (error: any) {
+            console.log(error);
+            if (error.name === 'UnsupportedError') {
+                console.error('Browser not supported');
+            }
+        }
+    };
+
+    /**
+     * Step 3: Create a Transport for Sending Media.
+     * This function initiates the creation of a transport on the server-side for sending media,
+     * and then replicates the transport on the client-side using the parameters returned by the server.
+     */
+    const createSendTransport = async () => {
+        // Request the server to create a send transport
+        socket.emit(
+            'createTransport',
+            { sender: true, roomId, peerId },
+            ({
+                params,
+            }: {
+                params: {
+                    /**
+                     * A unique identifier generated by mediasoup for the transport.
+                     * Necessary for differentiating between multiple transports.
+                     */
+                    id: string;
+                    /**
+                     * Interactive Connectivity Establishment (ICE) parameters.
+                     * Necessary for the negotiation of network connections.
+                     */
+                    iceParameters: IceParameters;
+                    /**
+                     * Array of ICE candidates.
+                     * Necessary for establishing network connectivity through NATs and firewalls.
+                     */
+                    iceCandidates: IceCandidate[];
+                    /**
+                     * Datagram Transport Layer Security (DTLS) parameters.
+                     * Necessary for securing the transport with encryption.
+                     */
+                    dtlsParameters: DtlsParameters;
+                    /**
+                     * Error object if any error occurs during transport creation.
+                     * */
+                    error?: unknown;
+                };
+            }) => {
+                if (params.error) {
+                    console.log(params.error);
+                    return;
+                }
+
+                /**
+                 * Replicate the send transport on the client-side.
+                 * The `device.createSendTransport` method creates a send transport instance on the client-side
+                 * using the parameters provided by the server.
+                 */
+                let transport = device?.createSendTransport(params);
+
+                // Update the state to hold the reference to the created transport
+                setProducerTransport(transport || null);
+
+                /**
+                 * Event handler for the "connect" event on the transport.
+                 * This event is triggered when the transport is ready to be connected.
+                 * The `dtlsParameters` are provided by the transport and are required to establish
+                 * the DTLS connection between the client and the server.
+                 * This event it emitted as a result of calling the `producerTransport?.produce(params)`
+                 * method in the next step. The event will only be emitted if this is the first time
+                 */
+                transport?.on(
+                    'connect',
+                    async (
+                        { dtlsParameters }: any,
+                        callback: any,
+                        errback: any
+                    ) => {
+                        try {
+                            console.log(
+                                '----------> producer transport has connected'
+                            );
+                            // Notify the server that the transport is ready to connect with the provided DTLS parameters
+                            socket.emit('connectProducerTransport', {
+                                dtlsParameters,
+                                roomId,
+                                peerId,
+                            });
+                            // Callback to indicate success
+                            callback();
+                        } catch (error) {
+                            // Errback to indicate failure
+                            errback(error);
+                        }
+                    }
+                );
+
+                /**
+                 * Event handler for the "produce" event on the transport.
+                 * This event is triggered when the transport is ready to start producing media.
+                 * The `parameters` object contains the necessary information for producing media,
+                 * including the kind of media (audio or video) and the RTP parameters.
+                 * The event is emitted as a result of calling the `producerTransport?.produce(params)`
+                 * method in the next step.
+                 */
+                transport?.on(
+                    'produce',
+                    async (parameters: any, callback: any, errback: any) => {
+                        const { kind, rtpParameters } = parameters;
+
+                        console.log('----------> transport-produce');
+
+                        try {
+                            // Notify the server to start producing media with the provided parameters
+                            socket.emit(
+                                'transport-produce',
+                                { kind, rtpParameters, roomId, peerId },
+                                ({ id }: any) => {
+                                    // Callback to provide the server-generated producer ID back to the transport
+                                    callback({ id });
+                                }
+                            );
+                        } catch (error) {
+                            // Errback to indicate failure
+                            errback(error);
+                        }
+                    }
+                );
+            }
+        );
+    };
+
+    /**
+     * Step 4: Connect the Send Transport and Start Producing Media.
+     * This function initiates the process of producing media using the previously created send transport.
+     */
+    const connectSendTransport = async () => {
+        /**
+         * This instructs the transport to start sending media to the router.
+         * The transport will emit a "connect" event if this is the first time the transport is being connected.
+         * Before this method completes, the transport will emit a "produce" event which was
+         * was subscribed to in the previous step so the application will transmit the event parameters to the server.
+         * */
+        const producePromises = [];
+        
+        // Produce video if available
+        if (params.video.track) {
+            const videoProducer = await producerTransport?.produce({
                 track: params.video.track,
                 encodings: params.video.encoding,
                 codecOptions: params.video.codecOptions,
             });
-
-            setProducers((prev) => ({ ...prev, video: videoProducer }));
-            console.log('Video producer created');
-        } catch (error) {
-            console.error('Error producing video:', error);
+            setProducers(prev => ({ ...prev, video: videoProducer }));
+            producePromises.push(videoProducer);
         }
-    };
-
-    const produceAudio = async (transport: Transport) => {
-        if (!params.audio.track) return;
-
-        try {
-            const audioProducer = await transport.produce({
+        
+        // Produce audio if available
+        if (params.audio.track) {
+            const audioProducer = await producerTransport?.produce({
                 track: params.audio.track,
             });
-
-            setProducers((prev) => ({ ...prev, audio: audioProducer }));
-            console.log('Audio producer created');
-        } catch (error) {
-            console.error('Error producing audio:', error);
+            setProducers(prev => ({ ...prev, audio: audioProducer }));
+            producePromises.push(audioProducer);
         }
+
+        // Event handlers for track ending and transport closing events
+        producePromises.forEach(producer => {
+            producer?.on('trackended', () => {
+                console.log('trackended');
+            });
+            producer?.on('transportclose', () => {
+                console.log('transportclose');
+            });
+        });
     };
 
-    const createRecvTransport = async (
-        device: Device,
-        producerPeerId: string
-    ): Promise<Transport> => {
+    /**
+     * Step 5: Create a Transport for Receiving Media.
+     * This function initiates the creation of a transport on the server-side for receiving media,
+     * and then replicates the transport on the client-side using the parameters returned by the server.
+     */
+    const createRecvTransport = async (producerPeerId: string) => {
         return new Promise((resolve, reject) => {
-            const currentSocket = socketRef.current || socket;
-
-            if (!currentSocket) {
-                reject(new Error('Socket not available'));
-                return;
-            }
-
-            currentSocket.emit(
+            // Requesting the server to create a receive transport
+            socket.emit(
                 'createTransport',
                 { sender: false, roomId, peerId, producerPeerId },
                 ({ params }: { params: any }) => {
                     if (params.error) {
+                        console.log(params.error);
                         reject(params.error);
                         return;
                     }
 
-                    const transport = device.createRecvTransport(params);
+                    // Creating a receive transport on the client-side using the server-provided parameters
+                    let transport = device?.createRecvTransport(params);
+                    
+                    if (!transport) {
+                        reject(new Error('Failed to create transport'));
+                        return;
+                    }
 
+                    /**
+                     * This event is triggered when "consumerTransport.consume" is called
+                     * for the first time on the client-side.
+                     * */
                     transport.on(
                         'connect',
                         async (
@@ -560,584 +441,240 @@ export default function Home() {
                             errback: any
                         ) => {
                             try {
-                                currentSocket.emit('connectConsumerTransport', {
+                                // Notifying the server to connect the receive transport with the provided DTLS parameters
+                                await socket.emit('connectConsumerTransport', {
                                     dtlsParameters,
                                     roomId,
                                     peerId,
                                     producerPeerId,
                                 });
+                                console.log(
+                                    '----------> consumer transport has connected'
+                                );
                                 callback();
                             } catch (error) {
                                 errback(error);
                             }
                         }
                     );
-
+                    
                     resolve(transport);
                 }
             );
         });
     };
 
-    const consumeMedia = async (
-        producerPeerId: string,
-        kind: 'video' | 'audio',
-        deviceToUse?: Device
-    ) => {
-        // Use the most current device available
-        const activeDevice = deviceToUse || deviceRef.current || device;
-
-        if (!activeDevice) {
-            console.error('Device not ready for consumption');
-            return;
-        }
-
+    /**
+     * Consume media from a specific producer peer
+     */
+    const consumeMedia = async (producerPeerId: string, kind: 'video' | 'audio') => {
         try {
-            // Use one transport per peer
-            const transportKey = producerPeerId;
-
-            let transport = consumerTransports[transportKey];
+            console.log(`Starting to consume ${kind} from ${producerPeerId}`);
+            
+            // Get or create transport for this producer peer
+            let transport = consumerTransports[producerPeerId];
             if (!transport) {
-                console.log(
-                    `Creating new consumer transport for peer ${producerPeerId}`
-                );
-                transport = await createRecvTransport(
-                    activeDevice,
-                    producerPeerId
-                );
-                setConsumerTransports((prev) => ({
-                    ...prev,
-                    [transportKey]: transport,
-                }));
-            } else {
-                console.log(
-                    `Using existing consumer transport for peer ${producerPeerId}`
-                );
+                console.log(`Creating new transport for ${producerPeerId}`);
+                transport = await createRecvTransport(producerPeerId) as Transport;
+                setConsumerTransports(prev => ({ ...prev, [producerPeerId]: transport }));
+                console.log(`Transport created for ${producerPeerId}`);
             }
 
-            // Consume media from the transport
-            await consumeFromTransport(
-                transport,
-                producerPeerId,
-                kind,
-                activeDevice
+            // Requesting the server to start consuming media
+            await socket.emit(
+                'consumeMedia',
+                { 
+                    rtpCapabilities: device?.rtpCapabilities, 
+                    roomId, 
+                    peerId, 
+                    producerPeerId, 
+                    kind 
+                },
+                async ({ params }: any) => {
+                    if (params.error) {
+                        console.log(params.error);
+                        return;
+                    }
+
+                    // Consuming media using the receive transport
+                    let consumer = await transport.consume({
+                        id: params.id,
+                        producerId: params.producerId,
+                        kind: params.kind,
+                        rtpParameters: params.rtpParameters,
+                    });
+
+                    // Accessing the media track from the consumer
+                    const { track } = consumer;
+                    console.log(`Got ${kind} track from ${producerPeerId}:`, track);
+
+                    // Create or update remote video element
+                    createOrUpdateRemoteMediaElement(producerPeerId, track);
+
+                    // Notifying the server to resume media consumption
+                    socket.emit('resumePausedConsumer', { roomId, peerId, producerPeerId, kind });
+                    console.log(`Consumer resumed for ${kind} from ${producerPeerId}`);
+                }
             );
         } catch (error) {
             console.error('Error consuming media:', error);
         }
     };
 
-    const consumeFromTransport = async (
-        transport: Transport,
-        producerPeerId: string,
-        kind: 'video' | 'audio',
-        deviceToUse?: Device
-    ) => {
-        return new Promise<Consumer>((resolve, reject) => {
-            const currentSocket = socketRef.current || socket;
-
-            if (!currentSocket) {
-                reject(new Error('Socket not available'));
-                return;
-            }
-
-            currentSocket.emit(
-                'consumeMedia',
-                {
-                    rtpCapabilities:
-                        deviceToUse?.rtpCapabilities || device?.rtpCapabilities,
-                    roomId,
-                    peerId,
-                    producerPeerId,
-                    kind,
-                },
-                async ({ params }: any) => {
-                    if (params.error) {
-                        console.error(
-                            'Error in consumeMedia response:',
-                            params.error
-                        );
-                        reject(params.error);
-                        return;
-                    }
-
-                    try {
-                        const consumer = await transport.consume({
-                            id: params.id,
-                            producerId: params.producerId,
-                            kind: params.kind,
-                            rtpParameters: params.rtpParameters,
-                        });
-
-                        const { track } = consumer;
-                        console.log(
-                            `Got ${kind} track from peer ${producerPeerId}`
-                        );
-
-                        // Create or update media element
-                        createOrUpdateRemoteMediaElement(producerPeerId, track);
-
-                        // Resume consumer
-                        currentSocket.emit('resumePausedConsumer', {
-                            roomId,
-                            peerId,
-                            producerPeerId,
-                            kind,
-                        });
-
-                        resolve(consumer);
-                    } catch (error) {
-                        console.error('Error creating consumer:', error);
-                        reject(error);
-                    }
-                }
-            );
-        });
-    };
-
-    const createOrUpdateRemoteMediaElement = (
-        producerPeerId: string,
-        track: MediaStreamTrack
-    ) => {
+    /**
+     * Create or update remote video element for a peer
+     */
+    const createOrUpdateRemoteMediaElement = (producerPeerId: string, track: MediaStreamTrack) => {
         let videoElement = remoteVideosRef.current[producerPeerId];
         let stream: MediaStream;
 
         if (!videoElement) {
-            // Create a new video element if it doesn't exist
+            // Create new video element
             videoElement = document.createElement('video');
             videoElement.autoplay = true;
             videoElement.playsInline = true;
+            videoElement.controls = true;
+            videoElement.muted = false; // IMPORTANT: Don't mute remote video for audio
+            videoElement.volume = 1.0; // Max volume
             videoElement.style.width = '300px';
             videoElement.style.height = '200px';
             videoElement.style.border = '1px solid #ccc';
-            videoElement.style.borderRadius = '8px';
-            videoElement.style.backgroundColor = '#000';
+            videoElement.style.margin = '10px';
 
             stream = new MediaStream();
             videoElement.srcObject = stream;
 
+            // Add label
             const label = document.createElement('div');
-            label.textContent = `${producerPeerId}`;
+            label.textContent = `Peer: ${producerPeerId}`;
             label.style.textAlign = 'center';
-            label.style.fontSize = '14px';
-            label.style.marginBottom = '5px';
+            label.style.fontSize = '12px';
             label.style.fontWeight = 'bold';
-            label.style.color = '#333';
 
             const container = document.createElement('div');
-            container.style.margin = '10px';
             container.appendChild(label);
             container.appendChild(videoElement);
 
-            const remoteVideosContainer =
-                document.getElementById('remote-videos');
-            if (remoteVideosContainer) {
-                remoteVideosContainer.appendChild(container);
+            // Add to DOM
+            const remoteContainer = document.getElementById('remote-videos');
+            if (remoteContainer) {
+                remoteContainer.appendChild(container);
                 remoteVideosRef.current[producerPeerId] = videoElement;
-                console.log(
-                    `Video element created and added for ${producerPeerId}`
-                );
-            } else {
-                console.error('Remote videos container not found');
             }
         } else {
-            // Use existing stream if element exists
             stream = videoElement.srcObject as MediaStream;
         }
 
-        // Add the new track to the stream
+        // Add track to stream
         stream.addTrack(track);
-
-        // Ensure video plays
-        videoElement.play().catch(console.error);
-    };
-
-    const consumeAllExistingProducers = async (deviceToUse: Device) => {
-        return new Promise<any>((resolve) => {
-            console.log('Requesting existing producers...');
-            socket.emit(
-                'getExistingProducers',
-                { roomId, peerId },
-                async (data: any) => {
-                    console.log('Existing producers received:', data.producers);
-
-                    if (data.producers && data.producers.length > 0) {
-                        console.log(
-                            `Found ${data.producers.length} existing producers to consume`
-                        );
-                        console.log(
-                            'Device RTP capabilities:',
-                            deviceToUse.rtpCapabilities
-                        );
-
-                        for (const producer of data.producers) {
-                            if (producer.peerId !== peerId) {
-                                try {
-                                    console.log(
-                                        `Consuming ${producer.kind} from ${producer.peerId}`
-                                    );
-
-                                    // Use the passed device directly
-                                    const transportKey = producer.peerId;
-
-                                    // Get or create transport for this peer
-                                    let transport =
-                                        consumerTransports[transportKey];
-                                    if (!transport) {
-                                        transport = await createRecvTransport(
-                                            deviceToUse,
-                                            producer.peerId
-                                        );
-                                        // Use a functional update to avoid race conditions
-                                        setConsumerTransports((prev) => ({
-                                            ...prev,
-                                            [transportKey]: transport,
-                                        }));
-                                    }
-
-                                    // Consume media with the specific device
-                                    await consumeFromTransport(
-                                        transport,
-                                        producer.peerId,
-                                        producer.kind,
-                                        deviceToUse
-                                    );
-
-                                    console.log(
-                                        `Successfully consumed ${producer.kind} from ${producer.peerId}`
-                                    );
-                                    // Delay between consumers
-                                    await new Promise((resolve) =>
-                                        setTimeout(resolve, 300)
-                                    );
-                                } catch (error) {
-                                    console.error(
-                                        `Error consuming ${producer.kind} from ${producer.peerId}:`,
-                                        error
-                                    );
-                                }
-                            }
-                        }
-                        console.log(
-                            'Finished consuming all existing producers'
-                        );
-                    } else {
-                        console.log('No existing producers found');
-                    }
-
-                    resolve(data);
-                }
-            );
+        console.log(`Added ${track.kind} track to stream. Stream now has ${stream.getTracks().length} tracks`);
+        
+        // For audio tracks, ensure the video element is ready to play audio
+        if (track.kind === 'audio') {
+            videoElement.muted = false;
+            videoElement.volume = 1.0;
+            console.log('Audio track added, ensuring video element is unmuted');
+        }
+        
+        // Play the video element
+        videoElement.play().then(() => {
+            console.log(`Video element playing for ${producerPeerId} with ${track.kind} track`);
+        }).catch((error) => {
+            console.error(`Error playing video element for ${producerPeerId}:`, error);
+            // If autoplay fails, try to play after user interaction
+            videoElement.onclick = () => {
+                videoElement.play().catch(console.error);
+            };
         });
     };
 
-    if (!roomId || !peerId) {
-        return (
-            <main
-                style={{
-                    padding: '20px',
-                    maxWidth: '600px',
-                    margin: '0 auto',
-                    fontFamily: 'Arial, sans-serif',
-                }}
-            >
-                <h1 style={{ textAlign: 'center', color: '#333' }}>
-                    MediaSoup Video Chat
-                </h1>
-                <div
-                    style={{
-                        backgroundColor: '#f8f9fa',
-                        padding: '30px',
-                        borderRadius: '12px',
-                        boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
-                    }}
-                >
-                    <p
-                        style={{
-                            textAlign: 'center',
-                            marginBottom: '20px',
-                            color: '#666',
-                        }}
-                    >
-                        Enter room details to join:
-                    </p>
-                    <div
-                        style={{
-                            display: 'flex',
-                            flexDirection: 'column',
-                            gap: '15px',
-                        }}
-                    >
-                        <input
-                            type='text'
-                            placeholder='Room ID'
-                            value={roomId}
-                            onChange={(e) => setRoomId(e.target.value)}
-                            style={{
-                                padding: '12px',
-                                fontSize: '16px',
-                                border: '2px solid #ddd',
-                                borderRadius: '8px',
-                                outline: 'none',
-                            }}
-                        />
-                        <input
-                            type='text'
-                            placeholder='Your Name/ID'
-                            value={peerId}
-                            onChange={(e) => setPeerId(e.target.value)}
-                            style={{
-                                padding: '12px',
-                                fontSize: '16px',
-                                border: '2px solid #ddd',
-                                borderRadius: '8px',
-                                outline: 'none',
-                            }}
-                        />
-                        <button
-                            onClick={() => {
-                                if (roomId && peerId) {
-                                    window.location.search = `?roomId=${roomId}&peerId=${peerId}`;
-                                }
-                            }}
-                            disabled={!roomId || !peerId}
-                            style={{
-                                padding: '15px',
-                                fontSize: '16px',
-                                backgroundColor:
-                                    !roomId || !peerId ? '#ccc' : '#007bff',
-                                color: 'white',
-                                border: 'none',
-                                borderRadius: '8px',
-                                cursor:
-                                    !roomId || !peerId
-                                        ? 'not-allowed'
-                                        : 'pointer',
-                                fontWeight: 'bold',
-                            }}
-                        >
-                            Enter Room
-                        </button>
-                    </div>
-                </div>
-            </main>
-        );
-    }
+    /**
+     * Get existing producers and consume them
+     */
+    const getExistingProducers = async () => {
+        socket.emit('getExistingProducers', { roomId, peerId }, (data: any) => {
+            if (data.producers) {
+                console.log('Found existing producers:', data.producers);
+                data.producers.forEach((producer: any, index: number) => {
+                    if (producer.peerId !== peerId) {
+                        // Add more delay between each consumption to prevent overwhelming the server
+                        setTimeout(() => {
+                            consumeMedia(producer.peerId, producer.kind);
+                        }, (index + 1) * 1000); // 1 second delay between each
+                    }
+                });
+            }
+        });
+    };
 
     return (
-        <main
-            style={{
-                padding: '20px',
-                maxWidth: '1200px',
-                margin: '0 auto',
-                fontFamily: 'Arial, sans-serif',
-                backgroundColor: '#f5f5f5',
-                minHeight: '100vh',
-            }}
-        >
-            <h1
-                style={{
-                    textAlign: 'center',
-                    marginBottom: '30px',
-                    color: '#333',
-                    fontSize: '2rem',
-                }}
-            >
-                Room: {roomId}
-            </h1>
-
-            {/* Local Video Section */}
-            <div
-                style={{
-                    marginBottom: '30px',
-                    textAlign: 'center',
-                    backgroundColor: 'white',
-                    padding: '20px',
-                    borderRadius: '12px',
-                    boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
-                }}
-            >
-                <h3 style={{ color: '#333', marginBottom: '15px' }}>
-                    You ({peerId})
-                </h3>
-                <div style={{ position: 'relative', display: 'inline-block' }}>
-                    <video
-                        ref={videoRef}
-                        autoPlay
-                        playsInline
-                        muted
-                        style={{
-                            width: '400px',
-                            height: '300px',
-                            border: '3px solid #007bff',
-                            borderRadius: '12px',
-                            backgroundColor: '#000',
-                            display: videoMuted ? 'none' : 'block',
-                        }}
-                    />
-                    {videoMuted && (
-                        <div
-                            style={{
-                                width: '400px',
-                                height: '300px',
-                                border: '3px solid #007bff',
-                                borderRadius: '12px',
-                                backgroundColor: '#333',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center',
-                                color: 'white',
-                                fontSize: '18px',
-                                fontWeight: 'bold',
-                            }}
-                        >
-                            📷 Camera Off
-                        </div>
-                    )}
-                </div>
-
-                {/* Media Controls */}
-                <div
-                    style={{
-                        marginTop: '20px',
-                        display: 'flex',
-                        gap: '15px',
-                        justifyContent: 'center',
-                    }}
-                >
-                    <button
-                        onClick={toggleVideo}
-                        style={{
-                            padding: '12px 24px',
-                            fontSize: '16px',
-                            backgroundColor: videoMuted ? '#dc3545' : '#28a745',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            fontWeight: 'bold',
-                            transition: 'all 0.3s ease',
-                        }}
-                    >
-                        {videoMuted ? '📷 Unmute Video' : '📷 Mute Video'}
-                    </button>
-
-                    <button
-                        onClick={toggleAudio}
-                        style={{
-                            padding: '12px 24px',
-                            fontSize: '16px',
-                            backgroundColor: audioMuted ? '#dc3545' : '#28a745',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            fontWeight: 'bold',
-                            transition: 'all 0.3s ease',
-                        }}
-                    >
-                        {audioMuted ? '🎤 Unmute Audio' : '🎤 Mute Audio'}
-                    </button>
-                </div>
-            </div>
-
-            {/* Join Button */}
-            {!isJoined && (
-                <div style={{ textAlign: 'center', marginBottom: '30px' }}>
-                    <button
-                        onClick={joinRoom}
-                        disabled={isConnecting || !mediaInitialized}
-                        style={{
-                            padding: '18px 36px',
-                            fontSize: '20px',
-                            backgroundColor: isConnecting
-                                ? '#6c757d'
-                                : '#007bff',
-                            color: 'white',
-                            border: 'none',
-                            borderRadius: '12px',
-                            cursor:
-                                isConnecting || !mediaInitialized
-                                    ? 'not-allowed'
-                                    : 'pointer',
-                            fontWeight: 'bold',
-                            boxShadow: '0 4px 15px rgba(0,123,255,0.3)',
-                            transition: 'all 0.3s ease',
-                        }}
-                    >
-                        {isConnecting ? 'Joining Room...' : 'Join Room'}
-                    </button>
-                </div>
-            )}
-
-            {/* Remote Videos - Always show container */}
-            <div
-                style={{
-                    marginTop: '30px',
-                    backgroundColor: 'white',
-                    padding: '20px',
-                    borderRadius: '12px',
-                    boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
-                }}
-            >
-                <h3
-                    style={{
-                        color: '#333',
-                        textAlign: 'center',
-                        marginBottom: '20px',
-                    }}
-                >
-                    Participants ({remotePeers.length})
-                </h3>
-                <div
-                    id='remote-videos'
-                    style={{
-                        display: 'flex',
-                        flexWrap: 'wrap',
-                        gap: '20px',
-                        justifyContent: 'center',
-                        minHeight: '50px', // Ensure container exists
-                    }}
-                >
-                    {remotePeers.length === 0 && (
-                        <p
-                            style={{
-                                color: '#666',
-                                textAlign: 'center',
-                                width: '100%',
-                            }}
-                        >
-                            No other participants yet...
-                        </p>
-                    )}
-                    {/* Remote video elements will be dynamically added here */}
-                </div>
+        <main style={{ padding: '20px' }}>
+            <h1>MediaSoup WebRTC Demo</h1>
+            
+            {/* Room Management */}
+            <div style={{ marginBottom: '20px' }}>
+                <input
+                    type="text"
+                    placeholder="Room ID"
+                    value={roomId}
+                    onChange={(e) => setRoomId(e.target.value)}
+                    style={{ marginRight: '10px', padding: '5px' }}
+                />
+                <input
+                    type="text"
+                    placeholder="Your Peer ID"
+                    value={peerId}
+                    onChange={(e) => setPeerId(e.target.value)}
+                    style={{ marginRight: '10px', padding: '5px' }}
+                />
+                <button onClick={joinRoom} disabled={!roomId || !peerId || isJoined}>
+                    {isJoined ? 'Joined' : 'Join Room'}
+                </button>
             </div>
 
             {/* Status */}
+            <div style={{ marginBottom: '20px' }}>
+                <p>Status: {isJoined ? 'Connected' : 'Not Connected'}</p>
+                <p>Remote Peers: {remotePeers.length}</p>
+            </div>
+
+            {/* Local Video */}
+            <div style={{ marginBottom: '20px' }}>
+                <h3>Local Video</h3>
+                <video ref={videoRef} autoPlay playsInline muted style={{ width: '300px', border: '1px solid #ccc' }} />
+            </div>
+
+            {/* Remote Videos */}
+            <div style={{ marginBottom: '20px' }}>
+                <h3>Remote Videos</h3>
+                <div id="remote-videos" style={{ display: 'flex', flexWrap: 'wrap', gap: '10px' }}>
+                    {remotePeers.length === 0 && <p>No remote peers</p>}
+                </div>
+            </div>
+
+            {/* Controls */}
             <div
                 style={{
-                    marginTop: '30px',
-                    padding: '15px',
-                    backgroundColor: 'white',
-                    borderRadius: '8px',
-                    textAlign: 'center',
-                    boxShadow: '0 2px 10px rgba(0,0,0,0.1)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '10px',
+                    maxWidth: '300px',
                 }}
             >
-                <p style={{ margin: '5px 0', color: '#333' }}>
-                    Connection: {isJoined ? '✅ Connected' : '⏳ Not Connected'}
-                </p>
-                <p style={{ margin: '5px 0', color: '#333' }}>
-                    Media:{' '}
-                    {mediaInitialized ? '✅ Ready' : '⏳ Initializing...'}
-                </p>
-                {isJoined && (
-                    <p style={{ margin: '5px 0', color: '#333' }}>
-                        Setup:{' '}
-                        {setupComplete ? '✅ Complete' : '⏳ In Progress...'}
-                    </p>
-                )}
+                <button onClick={startCamera}>Get Local Media</button>
+                <button onClick={getRouterRtpCapabilities} disabled={!isJoined}>
+                    Get Router RTP Capabilities
+                </button>
+                <button onClick={createDevice} disabled={!rtpCapabilities}>Create Device</button>
+                <button onClick={createSendTransport} disabled={!device}>
+                    Create Send Transport
+                </button>
+                <button onClick={connectSendTransport} disabled={!producerTransport}>
+                    Connect Send Transport & Produce
+                </button>
+                <button onClick={getExistingProducers} disabled={!device}>
+                    Get Existing Producers
+                </button>
             </div>
         </main>
     );

@@ -124,10 +124,7 @@ const createWebRtcTransport = async (
 ) => {
   try {
     const webRtcTransportOptions = {
-      listenIps: [{ ip: "0.0.0.0", announcedIp: "44.225.181.72"}],
-//       100.20.92.101
-// 44.225.181.72
-// 44.227.217.144
+      listenIps: [{ ip: "0.0.0.0", announcedIp: "192.168.1.108" }], // Removed announcedIp: null
       enableUdp: true,
       enableTcp: true,
       preferUdp: true,
@@ -232,34 +229,29 @@ peers.on("connection", async (socket) => {
   });
 
   socket.on("createTransport", async ({ sender, roomId, peerId, producerPeerId }, callback) => {
-    try {
-      const room = rooms.get(roomId);
-      const peer = room?.peers.get(peerId);
+    const room = rooms.get(roomId);
+    const peer = room?.peers.get(peerId);
 
-      if (!room || !peer) {
-        callback({ params: { error: "Room or peer not found" } });
-        return;
-      }
+    if (!room || !peer) {
+      callback({ params: { error: "Room or peer not found" } });
+      return;
+    }
 
-      if (sender) {
-        // Create producer transport (one transport can handle both audio and video)
-        const transport = await createWebRtcTransport(room.router, callback);
-        if (transport) {
-          peer.producerTransport = transport;
-          console.log(`Producer transport created for peer ${peerId}`);
-        }
-      } else {
-        // Create consumer transport for a specific producer peer
-        const transportKey = producerPeerId;
-        const transport = await createWebRtcTransport(room.router, callback);
-        if (transport && producerPeerId) {
-          peer.consumerTransports.set(transportKey, transport);
-          console.log(`Consumer transport created for peer ${peerId} consuming from ${producerPeerId}`);
-        }
+    if (sender) {
+      // Create producer transport (one transport can handle both audio and video)
+      const transport = await createWebRtcTransport(room.router, callback);
+      if (transport) {
+        peer.producerTransport = transport;
+        console.log(`Producer transport created for peer ${peerId}`);
       }
-    } catch (error) {
-      console.error("Error creating transport:", error);
-      callback({ params: { error: error instanceof Error ? error.message : String(error) } });
+    } else {
+      // Create consumer transport for a specific producer peer
+      const transportKey = producerPeerId;
+      const transport = await createWebRtcTransport(room.router, callback);
+      if (transport && producerPeerId) {
+        peer.consumerTransports.set(transportKey, transport);
+        console.log(`Consumer transport created for peer ${peerId} consuming from ${producerPeerId}`);
+      }
     }
   });
 
