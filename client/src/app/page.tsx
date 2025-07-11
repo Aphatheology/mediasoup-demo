@@ -68,19 +68,12 @@ export default function Home() {
      * On successful connection, the camera is started to obtain a media stream.
      */
     useEffect(() => {
-        // Determine server URL based on environment
-        let serverUrl;
-        
-        if (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') {
-            // Local development
-            serverUrl = 'http://192.168.1.108:4000/mediasoup';
-        } else {
-            // Remote/production - for now use HTTP even from HTTPS (for testing)
-            // TODO: Set up proper HTTPS server with SSL certificates
-            serverUrl = 'http://192.168.1.108:4000/mediasoup';
-        }
+        // Use environment variable or fallback
+        const serverUrl = process.env.NEXT_PUBLIC_API_URL || 'http://192.168.1.108:4000/mediasoup';
         
         console.log('Connecting to:', serverUrl);
+        console.log('Current page protocol:', window.location.protocol);
+        console.log('Current hostname:', window.location.hostname);
         
         const socket = io(serverUrl, {
             forceNew: true,
@@ -146,7 +139,6 @@ export default function Home() {
                 audio: true,
             });
             if (videoRef.current) {
-            
                 const videoTrack = stream.getVideoTracks()[0];
                 const audioTrack = stream.getAudioTracks()[0];
                 
