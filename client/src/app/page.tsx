@@ -69,7 +69,7 @@ export default function Home() {
      */
     useEffect(() => {
         // Use environment variable or fallback
-        const serverUrl = process.env.NEXT_PUBLIC_API_URL || 'http://192.168.1.108:4000/mediasoup';
+        const serverUrl = process.env.NEXT_PUBLIC_API_URL;
         
         console.log('Connecting to:', serverUrl);
         console.log('Current page protocol:', window.location.protocol);

@@ -15,6 +15,10 @@ app.use(
   })
 );
 
+app.get('/', (req, res) => {
+  res.send('🎉 Mediasoup server is up and running!');
+});
+
 const io = new Server(server, {
   cors: {
     origin: "*",
