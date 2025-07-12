@@ -1,0 +1,35 @@
+name: Deploy Server to EC2
+
+on:
+  push:
+    branches: [main]
+    paths: ['server/**']
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Deploy to EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            cd ~/mediasoup-demo
+            git pull origin main
+            cd server
+            yarn install
+            yarn build
+            pm2 restart mediasoup || pm2 start dist/index.js --name mediasoup
+            pm2 save
