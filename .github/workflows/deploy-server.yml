@@ -19,6 +19,18 @@ jobs:
         with:
           node-version: '20'
 
+      - name: Verify secrets are present
+        run: |
+          echo "Checking secrets..."
+          echo "EC2_HOST: ${{ secrets.EC2_HOST != '' && 'Present' || 'Missing' }}"
+          echo "EC2_USER: ${{ secrets.EC2_USER != '' && 'Present' || 'Missing' }}"
+          echo "EC2_SSH_KEY: ${{ secrets.EC2_SSH_KEY != '' && 'Present' || 'Missing' }}"
+          if [ -z "${{ secrets.EC2_HOST }}" ] || [ -z "${{ secrets.EC2_USER }}" ] || [ -z "${{ secrets.EC2_SSH_KEY }}" ]; then
+            echo "❌ One or more secrets are missing!"
+            exit 1
+          fi
+          echo "✅ All secrets are present"
+
       - name: Deploy to EC2
         uses: appleboy/ssh-action@v1.0.3
         with:

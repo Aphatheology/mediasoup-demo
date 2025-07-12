@@ -320,9 +320,9 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
         if (container) {
           videoElement.style.display = 'none';
           // Add placeholder if not exists
-          let placeholder = container.querySelector('.video-placeholder');
+          let placeholder = container.querySelector('.video-placeholder') as HTMLDivElement;
           if (!placeholder) {
-            placeholder = document.createElement('div');
+            placeholder = document.createElement('div') as HTMLDivElement;
             placeholder.className = 'video-placeholder';
             placeholder.style.width = '100%';
             placeholder.style.height = '100%';
@@ -347,7 +347,7 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
       console.log(`Track unmuted for ${producerPeerId}: ${track.kind}`);
       if (track.kind === 'video') {
         videoElement.style.display = 'block';
-        const placeholder = videoElement.parentElement?.querySelector('.video-placeholder');
+        const placeholder = videoElement.parentElement?.querySelector('.video-placeholder') as HTMLDivElement;
         if (placeholder) {
           placeholder.style.display = 'none';
         }
@@ -361,9 +361,9 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
         const container = videoElement.parentElement;
         if (container) {
           // Add placeholder if not exists
-          let placeholder = container.querySelector('.video-placeholder');
+          let placeholder = container.querySelector('.video-placeholder') as HTMLDivElement;
           if (!placeholder) {
-            placeholder = document.createElement('div');
+            placeholder = document.createElement('div') as HTMLDivElement;
             placeholder.className = 'video-placeholder';
             placeholder.style.width = '100%';
             placeholder.style.height = '100%';
@@ -401,7 +401,7 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
     // For video tracks, ensure video is visible
     if (track.kind === 'video') {
       videoElement.style.display = 'block';
-      const placeholder = videoElement.parentElement?.querySelector('.video-placeholder');
+      const placeholder = videoElement.parentElement?.querySelector('.video-placeholder') as HTMLDivElement;
       if (placeholder) {
         placeholder.style.display = 'none';
       }
