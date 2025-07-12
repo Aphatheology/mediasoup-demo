@@ -31,6 +31,47 @@ export const useRoom = (socket: Socket | null): UseRoomReturn => {
       // This will be handled by the consumeMedia function
     });
 
+    socket.on('peer-muted', (data) => {
+      console.log(`Peer ${data.peerId} ${data.muted ? 'muted' : 'unmuted'} ${data.kind}`);
+      
+      // Update mute indicators on remote peer videos
+      const remoteContainer = document.getElementById('remote-videos');
+      const peerContainers = remoteContainer?.children;
+      if (peerContainers) {
+        Array.from(peerContainers).forEach(container => {
+          const label = container.querySelector('div');
+          if (label && label.textContent === data.peerId) {
+            const videoElement = container.querySelector('video') as HTMLVideoElement;
+            const muteIndicator = container.querySelector('.mute-indicator') || 
+              (() => {
+                const indicator = document.createElement('div');
+                indicator.className = 'mute-indicator';
+                indicator.style.cssText = 'position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.7); color: white; padding: 4px 8px; border-radius: 4px; font-size: 12px; display: none;';
+                container.appendChild(indicator);
+                return indicator;
+              })();
+            
+            if (data.kind === 'video') {
+              if (data.muted) {
+                if (videoElement) videoElement.style.display = 'none';
+                (muteIndicator as HTMLElement).textContent = 'Camera Off';
+                (muteIndicator as HTMLElement).style.display = 'block';
+              } else {
+                if (videoElement) videoElement.style.display = 'block';
+                (muteIndicator as HTMLElement).style.display = 'none';
+              }
+            } else if (data.kind === 'audio') {
+              if (data.muted) {
+                (muteIndicator as HTMLElement).textContent = 'Muted';
+                (muteIndicator as HTMLElement).style.display = 'block';
+              } else {
+                (muteIndicator as HTMLElement).style.display = 'none';
+              }
+            }
+          }
+        });
+      }
+    });
 
     socket.on('peer-left', (data) => {
       console.log('Peer left:', data);
@@ -53,6 +94,7 @@ export const useRoom = (socket: Socket | null): UseRoomReturn => {
       socket.off('peer-joined');
       socket.off('peer-left');
       socket.off('new-producer');
+      socket.off('peer-muted');
     };
   }, [socket]);
 

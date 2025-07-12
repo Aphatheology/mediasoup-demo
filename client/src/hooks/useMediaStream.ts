@@ -27,7 +27,13 @@ interface UseMediaStreamReturn {
   toggleAudio: () => void;
 }
 
-export const useMediaStream = (): UseMediaStreamReturn => {
+interface UseMediaStreamProps {
+  socket?: any;
+  roomId?: string;
+  peerId?: string;
+}
+
+export const useMediaStream = ({ socket, roomId, peerId }: UseMediaStreamProps = {}): UseMediaStreamReturn => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   
   const [params, setParams] = useState<MediaParams>({
@@ -56,7 +62,11 @@ export const useMediaStream = (): UseMediaStreamReturn => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: true,
-        audio: true,
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
 
       setCurrentStream(stream);
@@ -123,15 +133,19 @@ export const useMediaStream = (): UseMediaStreamReturn => {
 
         setVideoMuted(false);
         console.log('Video unmuted');
+        
+        // Notify other peers
+        if (socket && roomId && peerId) {
+          socket.emit('peer-muted', { roomId, peerId, kind: 'video', muted: false });
+        }
       } catch (error) {
         console.error('Error turning on camera:', error);
       }
     } else {
-      // Mute: stop the video track
+      // Mute: disable and set track to null, but keep the track in the stream
       const videoTrack = currentStream.getVideoTracks()[0];
       if (videoTrack) {
-        videoTrack.stop();
-        currentStream.removeTrack(videoTrack);
+        videoTrack.enabled = false;
 
         setParams((prev) => ({
           ...prev,
@@ -140,20 +154,92 @@ export const useMediaStream = (): UseMediaStreamReturn => {
 
         setVideoMuted(true);
         console.log('Video muted');
+        
+        // Notify other peers
+        if (socket && roomId && peerId) {
+          socket.emit('peer-muted', { roomId, peerId, kind: 'video', muted: true });
+        }
       }
     }
-  }, [currentStream, videoMuted]);
+  }, [currentStream, videoMuted, socket, roomId, peerId]);
 
   const toggleAudio = useCallback(() => {
-    if (currentStream) {
+    if (!currentStream) return;
+
+    if (audioMuted) {
+      // Unmute: check if existing track is valid, otherwise get new one
+      const audioTrack = currentStream.getAudioTracks()[0];
+      if (audioTrack && audioTrack.readyState === 'live') {
+        // Existing track is still valid, just enable it
+        audioTrack.enabled = true;
+        setParams((prev) => ({
+          ...prev,
+          audio: { ...prev.audio, track: audioTrack },
+        }));
+        setAudioMuted(false);
+        console.log('Audio unmuted with existing track');
+        
+        // Notify other peers
+        if (socket && roomId && peerId) {
+          socket.emit('peer-muted', { roomId, peerId, kind: 'audio', muted: false });
+        }
+      } else {
+        // Track ended or invalid, get new audio track
+        navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        }).then(newStream => {
+          const newAudioTrack = newStream.getAudioTracks()[0];
+          if (newAudioTrack) {
+            // Remove old audio track if exists
+            const oldAudioTrack = currentStream.getAudioTracks()[0];
+            if (oldAudioTrack) {
+              currentStream.removeTrack(oldAudioTrack);
+              oldAudioTrack.stop();
+            }
+            
+            // Add new audio track
+            currentStream.addTrack(newAudioTrack);
+            newAudioTrack.enabled = true;
+            
+            setParams((prev) => ({
+              ...prev,
+              audio: { ...prev.audio, track: newAudioTrack },
+            }));
+            setAudioMuted(false);
+            console.log('Audio unmuted with new track');
+            
+            // Notify other peers
+            if (socket && roomId && peerId) {
+              socket.emit('peer-muted', { roomId, peerId, kind: 'audio', muted: false });
+            }
+          }
+        }).catch(error => {
+          console.error('Error getting new audio track:', error);
+        });
+      }
+    } else {
+      // Mute: set track to null to stop sending audio
       const audioTrack = currentStream.getAudioTracks()[0];
       if (audioTrack) {
-        audioTrack.enabled = !audioMuted;
-        setAudioMuted(!audioMuted);
-        console.log(audioMuted ? 'Audio unmuted' : 'Audio muted');
+        audioTrack.enabled = false;
+        setParams((prev) => ({
+          ...prev,
+          audio: { ...prev.audio, track: null },
+        }));
+        setAudioMuted(true);
+        console.log('Audio muted');
+        
+        // Notify other peers
+        if (socket && roomId && peerId) {
+          socket.emit('peer-muted', { roomId, peerId, kind: 'audio', muted: true });
+        }
       }
     }
-  }, [currentStream, audioMuted]);
+  }, [currentStream, audioMuted, socket, roomId, peerId]);
 
   return {
     params,

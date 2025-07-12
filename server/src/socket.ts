@@ -271,6 +271,13 @@ export const setupSocketHandlers = (
     callback({ producers });
   });
 
+  // Handle mute/unmute notifications
+  socket.on("peer-muted", ({ roomId, peerId, kind, muted }) => {
+    console.log(`Peer ${peerId} ${muted ? 'muted' : 'unmuted'} ${kind}`);
+    // Notify other peers in the room
+    socket.to(roomId).emit("peer-muted", { peerId, kind, muted });
+  });
+
   // Handle disconnect
   socket.on("disconnect", () => {
     console.log(`Peer disconnected: ${socket.id}`);

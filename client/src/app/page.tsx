@@ -20,7 +20,7 @@ export default function Home() {
     initializeMedia, 
     toggleVideo, 
     toggleAudio 
-  } = useMediaStream();
+  } = useMediaStream({ socket, roomId, peerId });
   
   const {
     device,
