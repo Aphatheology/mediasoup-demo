@@ -3,11 +3,13 @@ dotenv.config();
 
 import express from "express";
 import http from "http";
+import https from "https";
+import url from "url";
 import os from "os";
-import { Server } from "socket.io";
 import cors from "cors";
 import mediasoup from "mediasoup";
-import { setupSocketHandlers } from "./socket.js";
+import protoo from "protoo-server";
+import { setupProtooHandlers } from "./protoo.js";
 
 const app = express();
 const port = 4000;
@@ -24,14 +26,8 @@ app.get('/', (_, res) => {
   res.send('🎉 Mediasoup server is up and running!');
 });
 
-const io = new Server(server, {
-  cors: {
-    origin: "*",
-    credentials: true,
-  },
-});
-
-const peers = io.of("/mediasoup");
+// Protoo WebSocket server
+let protooWebSocketServer: protoo.WebSocketServer;
 
 // mediasoup Workers array
 const mediasoupWorkers: mediasoup.types.Worker<mediasoup.types.AppData>[] = [];
@@ -85,7 +81,7 @@ const runMediasoupWorkers = async (): Promise<void> => {
     setInterval(async () => {
       try {
         const usage = await worker.getResourceUsage();
-        console.log(`Worker ${i} resource usage [pid:${worker.pid}]:`, usage);
+        // console.log(`Worker ${i} resource usage [pid:${worker.pid}]:`, usage);
       } catch (error) {
         console.error(`Error getting worker ${i} usage:`, error);
       }
@@ -98,10 +94,47 @@ const runMediasoupWorkers = async (): Promise<void> => {
 // Initialize workers
 await runMediasoupWorkers();
 
-// Setup socket handlers with worker selection
-peers.on("connection", (socket) => {
-  setupSocketHandlers(socket, getMediasoupWorker);
-});
+// Initialize protoo WebSocket server
+const runProtooWebSocketServer = async (): Promise<void> => {
+  console.log('Running protoo WebSocketServer...');
+
+  // Create the protoo WebSocket server
+  protooWebSocketServer = new protoo.WebSocketServer(server, {
+    maxReceivedFrameSize: 960000, // ~960 KBytes
+    maxReceivedMessageSize: 960000,
+    fragmentOutgoingMessages: false,
+    fragmentationThreshold: Infinity,
+  });
+
+  // Handle protoo connection requests
+  protooWebSocketServer.on('connectionrequest', (info, accept, reject) => {
+    const u = url.parse(info.request.url, true);
+    const roomId = u.query['roomId'] as string;
+    const peerId = u.query['peerId'] as string;
+
+    if (!roomId || !peerId) {
+      reject(400, 'Connection request without roomId and/or peerId');
+      return;
+    }
+
+    console.log(
+      'protoo connection request [roomId:%s, peerId:%s, address:%s, origin:%s]',
+      roomId, peerId, info.socket.remoteAddress, info.origin
+    );
+
+    try {
+      // Accept the protoo WebSocket connection
+      const protooWebSocketTransport = accept();
+      setupProtooHandlers(protooWebSocketTransport, roomId, peerId, getMediasoupWorker);
+    } catch (error) {
+      console.error('Error accepting protoo connection:', error);
+      reject(500, 'Internal server error');
+    }
+  });
+};
+
+// Setup protoo WebSocket server
+await runProtooWebSocketServer();
 
 server.listen(port, () => {
   console.log(`Server listening on port ${port}`);

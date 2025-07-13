@@ -1,20 +1,24 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
-import { useSocket } from '../hooks/useSocket';
-import { useRoom } from '../hooks/useRoom';
-import { useMediaStream } from '../hooks/useMediaStream';
-import { useMediasoup } from '../hooks/useMediasoup';
+import { useEffect, useRef, useState } from 'react';
+import { useProtoo } from '../hooks/useProtoo';
+import { useProtooRoom } from '../hooks/useProtooRoom';
+import { useProtooMediaStream } from '../hooks/useProtooMediaStream';
+import { useProtooMediasoup } from '../hooks/useProtooMediasoup';
 
 export default function Home() {
   const webrtcSetupCompleted = useRef(false);
   
-  const { socket, isConnected } = useSocket();
-  const { roomId, peerId, isJoined, remotePeers, setRoomId, setPeerId, joinRoom } = useRoom(socket);
+  // State for room and peer IDs
+  const [roomId, setRoomId] = useState<string>('');
+  const [peerId, setPeerId] = useState<string>('');
+
+  // Initialize protoo hook (connection happens on demand)
+  const { protooPeer, isConnected, makeRequest, connect } = useProtoo();
+  const { isJoined, isConnecting, remotePeers, joinRoom } = useProtooRoom(protooPeer, isConnected, makeRequest, connect);
   
   const {
     device,
-    rtpCapabilities,
     getRouterRtpCapabilities,
     createDevice,
     createSendTransport,
@@ -22,7 +26,7 @@ export default function Home() {
     getExistingProducers,
     consumeMedia,
     producers,
-  } = useMediasoup(socket);
+  } = useProtooMediasoup(protooPeer, makeRequest, roomId, peerId);
 
   const { 
     params, 
@@ -33,7 +37,7 @@ export default function Home() {
     initializeMedia, 
     toggleVideo, 
     toggleAudio 
-  } = useMediaStream({ socket, roomId, peerId, producers });
+  } = useProtooMediaStream({ protooPeer, makeRequest, producers });
 
   // Auto-initialize media when component mounts
   useEffect(() => {
@@ -49,48 +53,26 @@ export default function Home() {
 
   // Listen for new producers and consume them
   useEffect(() => {
-    if (!socket || !device || !isJoined) return;
+    if (!protooPeer || !device || !isJoined) return;
 
-    const handleNewProducer = (data: any) => {
+    const handleNewProducer = (event: CustomEvent) => {
+      const data = event.detail;
       console.log('Consuming new producer:', data);
       if (data.producerPeerId !== peerId) {
-        consumeMedia(data.producerPeerId, data.kind, roomId, peerId);
+        consumeMedia(data.producerPeerId, data.kind);
       }
     };
 
-    socket.on('new-producer', handleNewProducer);
+    window.addEventListener('new-producer', handleNewProducer as EventListener);
 
     return () => {
-      socket.off('new-producer', handleNewProducer);
+      window.removeEventListener('new-producer', handleNewProducer as EventListener);
     };
-  }, [socket, device, isJoined, peerId, roomId, consumeMedia]);
-
-  // Listen for producer pause/resume events from server
-  useEffect(() => {
-    if (!socket) return;
-
-    const handleProducerPaused = (data: any) => {
-      console.log(`Producer paused: ${data.peerId} ${data.kind}`);
-      // Handle visual feedback for paused state if needed
-    };
-
-    const handleProducerResumed = (data: any) => {
-      console.log(`Producer resumed: ${data.peerId} ${data.kind}`);
-      // Handle visual feedback for resumed state if needed
-    };
-
-    socket.on('producerPaused', handleProducerPaused);
-    socket.on('producerResumed', handleProducerResumed);
-
-    return () => {
-      socket.off('producerPaused', handleProducerPaused);
-      socket.off('producerResumed', handleProducerResumed);
-    };
-  }, [socket]);
+  }, [protooPeer, device, isJoined, peerId, consumeMedia]);
 
   // Auto-setup WebRTC flow when room is joined
   useEffect(() => {
-    if (!isJoined || !mediaInitialized || !socket || webrtcSetupCompleted.current) return;
+    if (!isJoined || !mediaInitialized || !protooPeer || webrtcSetupCompleted.current) return;
 
     const setupWebRTC = async () => {
       try {
@@ -99,7 +81,7 @@ export default function Home() {
         
         // Step 1: Get router capabilities
         console.log('Step 1: Getting router capabilities...');
-        const capabilities = await getRouterRtpCapabilities(roomId);
+        const capabilities = await getRouterRtpCapabilities();
         if (!capabilities) {
           throw new Error('Failed to get router capabilities');
         }
@@ -116,7 +98,7 @@ export default function Home() {
         
         // Step 3: Create send transport
         console.log('Step 3: Creating send transport...');
-        const transport = await createSendTransport(roomId, peerId, createdDevice);
+        const transport = await createSendTransport(createdDevice);
         if (!transport) {
           throw new Error('Failed to create send transport');
         }
@@ -129,7 +111,7 @@ export default function Home() {
         
         // Step 5: Get and consume existing producers
         console.log('Step 5: Getting existing producers...');
-        await getExistingProducers(roomId, peerId);
+        await getExistingProducers();
         console.log('✓ Consuming existing producers');
         
       } catch (error) {
@@ -139,11 +121,25 @@ export default function Home() {
     };
 
     setupWebRTC();
-  }, [isJoined, mediaInitialized, socket, roomId, peerId]);
+  }, [isJoined, mediaInitialized, protooPeer, params, getRouterRtpCapabilities, createDevice, createSendTransport, connectSendTransport, getExistingProducers]);
+
+  const handleJoinRoom = async () => {
+    if (!roomId || !peerId) {
+      alert('Please enter both Room ID and Peer ID');
+      return;
+    }
+    
+    try {
+      await joinRoom(roomId, peerId);
+    } catch (error) {
+      console.error('Failed to join room:', error);
+      alert('Failed to join room. Please check the console for details.');
+    }
+  };
 
   return (
     <main style={{ padding: '20px' }}>
-      <h1>MediaSoup WebRTC Demo</h1>
+      <h1>MediaSoup WebRTC Demo (Protoo)</h1>
       
       {/* Room Management */}
       <div style={{ marginBottom: '20px' }}>
@@ -161,14 +157,18 @@ export default function Home() {
           onChange={(e) => setPeerId(e.target.value)}
           style={{ marginRight: '10px', padding: '5px' }}
         />
-        <button onClick={joinRoom} disabled={!roomId || !peerId || isJoined || !isConnected}>
-          {isJoined ? 'Joined' : 'Join Room'}
+        <button onClick={handleJoinRoom} disabled={!roomId || !peerId || isJoined || isConnecting}>
+          {isJoined ? 'Joined' : isConnecting ? 'Connecting...' : 'Join Room'}
         </button>
       </div>
 
       {/* Status */}
       <div style={{ marginBottom: '20px' }}>
-        <p>Socket: {isConnected ? '✅ Connected' : '⏳ Connecting...'}</p>
+        <p>Protoo: {
+          !roomId || !peerId ? '⏸️ Enter Room & Peer ID to connect' :
+          isConnected ? '✅ Connected' : 
+          isConnecting ? '⏳ Connecting...' : '⏸️ Click Join Room to connect'
+        }</p>
         <p>Media: {mediaInitialized ? '✅ Ready' : '⏳ Initializing...'}</p>
         <p>Room: {isJoined ? '✅ Joined' : '❌ Not joined'}</p>
         <p>Device: {device ? '✅ Ready' : '❌ Not ready'}</p>

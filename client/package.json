@@ -11,6 +11,7 @@
   "dependencies": {
     "mediasoup-client": "^3.12.4",
     "next": "14.0.1",
+    "protoo-client": "^4.0.6",
     "react": "^18",
     "react-dom": "^18",
     "react-icons": "^5.5.0",
