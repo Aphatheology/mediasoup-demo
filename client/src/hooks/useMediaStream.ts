@@ -31,9 +31,10 @@ interface UseMediaStreamProps {
   socket?: any;
   roomId?: string;
   peerId?: string;
+  producers?: { video?: any; audio?: any };
 }
 
-export const useMediaStream = ({ socket, roomId, peerId }: UseMediaStreamProps = {}): UseMediaStreamReturn => {
+export const useMediaStream = ({ socket, roomId, peerId, producers }: UseMediaStreamProps = {}): UseMediaStreamReturn => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   
   const [params, setParams] = useState<MediaParams>({
@@ -102,144 +103,44 @@ export const useMediaStream = ({ socket, roomId, peerId }: UseMediaStreamProps =
   }, [mediaInitialized, currentStream]);
 
   const toggleVideo = useCallback(async () => {
-    if (!currentStream) return;
+    if (!currentStream || !socket || !roomId || !peerId) return;
 
     if (videoMuted) {
-      // Unmute: get new video track
-      try {
-        const newStream = await navigator.mediaDevices.getUserMedia({
-          video: true,
-          audio: false,
-        });
-
-        const newVideoTrack = newStream.getVideoTracks()[0];
-        const oldVideoTrack = currentStream.getVideoTracks()[0];
-        
-        if (oldVideoTrack) {
-          currentStream.removeTrack(oldVideoTrack);
-          oldVideoTrack.stop();
-        }
-
-        currentStream.addTrack(newVideoTrack);
-
-        if (videoRef.current) {
-          videoRef.current.srcObject = currentStream;
-        }
-
-        setParams((prev) => ({
-          ...prev,
-          video: { ...prev.video, track: newVideoTrack },
-        }));
-
+      // Resume video producer
+      if (producers?.video) {
+        socket.emit('resumeProducer', { roomId, peerId, kind: 'video' });
         setVideoMuted(false);
-        console.log('Video unmuted');
-        
-        // Notify other peers
-        if (socket && roomId && peerId) {
-          socket.emit('peer-muted', { roomId, peerId, kind: 'video', muted: false });
-        }
-      } catch (error) {
-        console.error('Error turning on camera:', error);
+        console.log('Video producer resumed');
       }
     } else {
-      // Mute: disable and set track to null, but keep the track in the stream
-      const videoTrack = currentStream.getVideoTracks()[0];
-      if (videoTrack) {
-        videoTrack.enabled = false;
-
-        setParams((prev) => ({
-          ...prev,
-          video: { ...prev.video, track: null },
-        }));
-
+      // Pause video producer
+      if (producers?.video) {
+        socket.emit('pauseProducer', { roomId, peerId, kind: 'video' });
         setVideoMuted(true);
-        console.log('Video muted');
-        
-        // Notify other peers
-        if (socket && roomId && peerId) {
-          socket.emit('peer-muted', { roomId, peerId, kind: 'video', muted: true });
-        }
+        console.log('Video producer paused');
       }
     }
-  }, [currentStream, videoMuted, socket, roomId, peerId]);
+  }, [currentStream, videoMuted, socket, roomId, peerId, producers]);
 
   const toggleAudio = useCallback(() => {
-    if (!currentStream) return;
+    if (!currentStream || !socket || !roomId || !peerId) return;
 
     if (audioMuted) {
-      // Unmute: check if existing track is valid, otherwise get new one
-      const audioTrack = currentStream.getAudioTracks()[0];
-      if (audioTrack && audioTrack.readyState === 'live') {
-        // Existing track is still valid, just enable it
-        audioTrack.enabled = true;
-        setParams((prev) => ({
-          ...prev,
-          audio: { ...prev.audio, track: audioTrack },
-        }));
+      // Resume audio producer
+      if (producers?.audio) {
+        socket.emit('resumeProducer', { roomId, peerId, kind: 'audio' });
         setAudioMuted(false);
-        console.log('Audio unmuted with existing track');
-        
-        // Notify other peers
-        if (socket && roomId && peerId) {
-          socket.emit('peer-muted', { roomId, peerId, kind: 'audio', muted: false });
-        }
-      } else {
-        // Track ended or invalid, get new audio track
-        navigator.mediaDevices.getUserMedia({
-          audio: {
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true,
-          },
-        }).then(newStream => {
-          const newAudioTrack = newStream.getAudioTracks()[0];
-          if (newAudioTrack) {
-            // Remove old audio track if exists
-            const oldAudioTrack = currentStream.getAudioTracks()[0];
-            if (oldAudioTrack) {
-              currentStream.removeTrack(oldAudioTrack);
-              oldAudioTrack.stop();
-            }
-            
-            // Add new audio track
-            currentStream.addTrack(newAudioTrack);
-            newAudioTrack.enabled = true;
-            
-            setParams((prev) => ({
-              ...prev,
-              audio: { ...prev.audio, track: newAudioTrack },
-            }));
-            setAudioMuted(false);
-            console.log('Audio unmuted with new track');
-            
-            // Notify other peers
-            if (socket && roomId && peerId) {
-              socket.emit('peer-muted', { roomId, peerId, kind: 'audio', muted: false });
-            }
-          }
-        }).catch(error => {
-          console.error('Error getting new audio track:', error);
-        });
+        console.log('Audio producer resumed');
       }
     } else {
-      // Mute: set track to null to stop sending audio
-      const audioTrack = currentStream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = false;
-        setParams((prev) => ({
-          ...prev,
-          audio: { ...prev.audio, track: null },
-        }));
+      // Pause audio producer
+      if (producers?.audio) {
+        socket.emit('pauseProducer', { roomId, peerId, kind: 'audio' });
         setAudioMuted(true);
-        console.log('Audio muted');
-        
-        // Notify other peers
-        if (socket && roomId && peerId) {
-          socket.emit('peer-muted', { roomId, peerId, kind: 'audio', muted: true });
-        }
+        console.log('Audio producer paused');
       }
     }
-  }, [currentStream, audioMuted, socket, roomId, peerId]);
+  }, [currentStream, audioMuted, socket, roomId, peerId, producers]);
 
   return {
     params,

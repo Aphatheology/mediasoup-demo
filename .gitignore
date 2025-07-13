@@ -5,3 +5,4 @@ client/.env.local
 server/.env
 server/dist
 node_modules
+original

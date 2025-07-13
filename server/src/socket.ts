@@ -13,7 +13,7 @@ import { PeerInfo } from "./types.js";
 
 export const setupSocketHandlers = (
   socket: Socket,
-  worker: mediasoup.types.Worker<mediasoup.types.AppData>
+  getWorker: () => mediasoup.types.Worker<mediasoup.types.AppData>
 ) => {
   console.log(`New connection: ${socket.id}`);
   socket.emit("connection-success", { socketId: socket.id });
@@ -26,7 +26,7 @@ export const setupSocketHandlers = (
     try {
       console.log(`Peer ${peerId} joining room ${roomId}`);
 
-      const room = await getOrCreateRoom(roomId, worker);
+      const room = await getOrCreateRoom(roomId, getWorker());
       const peerInfo = addPeerToRoom(roomId, peerId, socket.id);
       
       currentRoomId = roomId;
@@ -271,7 +271,73 @@ export const setupSocketHandlers = (
     callback({ producers });
   });
 
-  // Handle mute/unmute notifications
+  // Handle producer pause/resume
+  socket.on("pauseProducer", async ({ roomId, peerId, kind }) => {
+    const room = getRoom(roomId);
+    const peer = room?.peers.get(peerId);
+
+    if (peer) {
+      const producer = kind === 'video' ? peer.producers.video : peer.producers.audio;
+      if (producer && !producer.paused) {
+        await producer.pause();
+        console.log(`Producer paused for peer ${peerId}, kind: ${kind}`);
+        
+        // Notify other peers
+        socket.to(roomId).emit("producerPaused", { peerId, kind });
+      }
+    }
+  });
+
+  socket.on("resumeProducer", async ({ roomId, peerId, kind }) => {
+    const room = getRoom(roomId);
+    const peer = room?.peers.get(peerId);
+
+    if (peer) {
+      const producer = kind === 'video' ? peer.producers.video : peer.producers.audio;
+      if (producer && producer.paused) {
+        await producer.resume();
+        console.log(`Producer resumed for peer ${peerId}, kind: ${kind}`);
+        
+        // Notify other peers
+        socket.to(roomId).emit("producerResumed", { peerId, kind });
+      }
+    }
+  });
+
+  // Handle consumer pause/resume
+  socket.on("pauseConsumer", async ({ roomId, peerId, producerPeerId, kind }) => {
+    const room = getRoom(roomId);
+    const peer = room?.peers.get(peerId);
+
+    if (peer) {
+      const peerConsumers = peer.consumers.get(producerPeerId);
+      if (peerConsumers) {
+        const consumer = kind === 'video' ? peerConsumers.video : peerConsumers.audio;
+        if (consumer && !consumer.paused) {
+          await consumer.pause();
+          console.log(`Consumer paused for peer ${peerId} consuming ${kind} from ${producerPeerId}`);
+        }
+      }
+    }
+  });
+
+  socket.on("resumeConsumer", async ({ roomId, peerId, producerPeerId, kind }) => {
+    const room = getRoom(roomId);
+    const peer = room?.peers.get(peerId);
+
+    if (peer) {
+      const peerConsumers = peer.consumers.get(producerPeerId);
+      if (peerConsumers) {
+        const consumer = kind === 'video' ? peerConsumers.video : peerConsumers.audio;
+        if (consumer && consumer.paused) {
+          await consumer.resume();
+          console.log(`Consumer resumed for peer ${peerId} consuming ${kind} from ${producerPeerId}`);
+        }
+      }
+    }
+  });
+
+  // Handle mute/unmute notifications (legacy support, will be replaced with pause/resume)
   socket.on("peer-muted", ({ roomId, peerId, kind, muted }) => {
     console.log(`Peer ${peerId} ${muted ? 'muted' : 'unmuted'} ${kind}`);
     // Notify other peers in the room

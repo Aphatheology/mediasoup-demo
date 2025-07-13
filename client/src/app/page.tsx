@@ -11,16 +11,6 @@ export default function Home() {
   
   const { socket, isConnected } = useSocket();
   const { roomId, peerId, isJoined, remotePeers, setRoomId, setPeerId, joinRoom } = useRoom(socket);
-  const { 
-    params, 
-    mediaInitialized, 
-    videoMuted, 
-    audioMuted, 
-    videoRef, 
-    initializeMedia, 
-    toggleVideo, 
-    toggleAudio 
-  } = useMediaStream({ socket, roomId, peerId });
   
   const {
     device,
@@ -33,6 +23,17 @@ export default function Home() {
     consumeMedia,
     producers,
   } = useMediasoup(socket);
+
+  const { 
+    params, 
+    mediaInitialized, 
+    videoMuted, 
+    audioMuted, 
+    videoRef, 
+    initializeMedia, 
+    toggleVideo, 
+    toggleAudio 
+  } = useMediaStream({ socket, roomId, peerId, producers });
 
   // Auto-initialize media when component mounts
   useEffect(() => {
@@ -64,43 +65,28 @@ export default function Home() {
     };
   }, [socket, device, isJoined, peerId, roomId, consumeMedia]);
 
-  // Handle video track changes - replace track when video is muted/unmuted
+  // Listen for producer pause/resume events from server
   useEffect(() => {
-    if (!webrtcSetupCompleted.current || !producers.video) return;
+    if (!socket) return;
 
-    if (params.video.track) {
-      // Video unmuted - replace with new track
-      console.log('Video track changed, replacing producer track...');
-      producers.video.replaceTrack({ track: params.video.track }).catch((error: any) => {
-        console.error('Error replacing video track:', error);
-      });
-    } else {
-      // Video muted - replace with null to stop sending video
-      console.log('Video muted, stopping video producer...');
-      producers.video.replaceTrack({ track: null }).catch((error: any) => {
-        console.error('Error stopping video track:', error);
-      });
-    }
-  }, [params.video.track, producers.video]);
+    const handleProducerPaused = (data: any) => {
+      console.log(`Producer paused: ${data.peerId} ${data.kind}`);
+      // Handle visual feedback for paused state if needed
+    };
 
-  // Handle audio track changes - replace track when audio is muted/unmuted  
-  useEffect(() => {
-    if (!webrtcSetupCompleted.current || !producers.audio) return;
+    const handleProducerResumed = (data: any) => {
+      console.log(`Producer resumed: ${data.peerId} ${data.kind}`);
+      // Handle visual feedback for resumed state if needed
+    };
 
-    if (params.audio.track) {
-      // Audio unmuted - replace with new track
-      console.log('Audio track changed, replacing producer track...');
-      producers.audio.replaceTrack({ track: params.audio.track }).catch((error: any) => {
-        console.error('Error replacing audio track:', error);
-      });
-    } else {
-      // Audio muted - replace with null to stop sending audio
-      console.log('Audio muted, stopping audio producer...');
-      producers.audio.replaceTrack({ track: null }).catch((error: any) => {
-        console.error('Error stopping audio track:', error);
-      });
-    }
-  }, [params.audio.track, producers.audio]);
+    socket.on('producerPaused', handleProducerPaused);
+    socket.on('producerResumed', handleProducerResumed);
+
+    return () => {
+      socket.off('producerPaused', handleProducerPaused);
+      socket.off('producerResumed', handleProducerResumed);
+    };
+  }, [socket]);
 
   // Auto-setup WebRTC flow when room is joined
   useEffect(() => {
