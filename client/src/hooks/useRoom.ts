@@ -9,6 +9,7 @@ interface UseRoomReturn {
   setRoomId: (id: string) => void;
   setPeerId: (id: string) => void;
   joinRoom: () => Promise<void>;
+  leaveRoom: (cleanupCallback?: () => void) => void;
 }
 
 export const useRoom = (socket: Socket | null): UseRoomReturn => {
@@ -133,6 +134,30 @@ export const useRoom = (socket: Socket | null): UseRoomReturn => {
     });
   }, [socket, roomId, peerId]);
 
+  const leaveRoom = useCallback((cleanupCallback?: () => void) => {
+    if (!socket || !isJoined || !roomId || !peerId) return;
+    
+    // Emit leave room event
+    socket.emit('leave-room', { roomId, peerId });
+    
+    // Call cleanup callback (for media cleanup)
+    if (cleanupCallback) {
+      cleanupCallback();
+    }
+    
+    // Reset local state
+    setIsJoined(false);
+    setRemotePeers([]);
+    
+    // Clear remote videos
+    const remoteContainer = document.getElementById('remote-videos');
+    if (remoteContainer) {
+      remoteContainer.innerHTML = '';
+    }
+    
+    console.log('Left room successfully');
+  }, [socket, isJoined, roomId, peerId]);
+
   return {
     roomId,
     peerId,
@@ -141,5 +166,6 @@ export const useRoom = (socket: Socket | null): UseRoomReturn => {
     setRoomId,
     setPeerId,
     joinRoom,
+    leaveRoom,
   };
 };

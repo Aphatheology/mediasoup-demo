@@ -228,30 +228,45 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
     
     if (!socket || !deviceToUse) throw new Error('Socket or device not available');
 
+    console.log(`createRecvTransport: Creating transport for ${peerId} to consume from ${producerPeerId}`);
+
     return new Promise((resolve, reject) => {
       socket.emit('createTransport', { sender: false, roomId, peerId, producerPeerId }, ({ params }: any) => {
+        console.log(`createRecvTransport response:`, { hasParams: !!params, hasError: !!params?.error, error: params?.error });
+        
         if (params.error) {
-          reject(params.error);
+          console.error(`Failed to create consumer transport for ${producerPeerId}:`, params.error);
+          reject(new Error(params.error));
           return;
         }
 
-        const transport = deviceToUse.createRecvTransport(params);
+        try {
+          const transport = deviceToUse.createRecvTransport(params);
 
-        transport.on('connect', async ({ dtlsParameters }: any, callback: any, errback: any) => {
-          try {
-            socket.emit('connectConsumerTransport', { dtlsParameters, roomId, peerId, producerPeerId });
-            callback();
-          } catch (error) {
-            errback(error);
-          }
-        });
+          transport.on('connect', async ({ dtlsParameters }: any, callback: any, errback: any) => {
+            try {
+              console.log(`Connecting consumer transport for ${peerId} consuming from ${producerPeerId}`);
+              socket.emit('connectConsumerTransport', { dtlsParameters, roomId, peerId, producerPeerId });
+              callback();
+            } catch (error) {
+              console.error(`Error connecting consumer transport:`, error);
+              errback(error);
+            }
+          });
 
-        resolve(transport);
+          console.log(`Consumer transport created successfully for ${peerId} consuming from ${producerPeerId}`);
+          resolve(transport);
+        } catch (error) {
+          console.error(`Error creating device transport:`, error);
+          reject(error);
+        }
       });
     });
   }, [socket, device]);
 
   const createOrUpdateRemoteMediaElement = useCallback((producerPeerId: string, track: MediaStreamTrack) => {
+    console.log(`createOrUpdateRemoteMediaElement called for ${producerPeerId} (${track.kind}): enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+    
     let videoElement = remoteVideosRef.current[producerPeerId];
     let stream: MediaStream;
 
@@ -355,7 +370,13 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
     });
 
     track.addEventListener('mute', () => {
-      console.log(`Track muted for ${producerPeerId}: ${track.kind}`);
+      console.log(`🔴 Track muted for ${producerPeerId}: ${track.kind}`, {
+        trackEnabled: track.enabled,
+        trackMuted: track.muted,
+        trackReadyState: track.readyState,
+        videoElementPaused: videoElement.paused,
+        videoElementMuted: videoElement.muted
+      });
       if (track.kind === 'video') {
         videoElement.style.display = 'none';
         const container = videoElement.parentElement;
@@ -398,9 +419,35 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
       }, 100);
     }
     
-    // For video tracks, ensure video is visible
+    // For video tracks, ensure video is visible and try to prevent muting
     if (track.kind === 'video') {
       videoElement.style.display = 'block';
+      videoElement.muted = false;
+      
+      // Force play to prevent autoplay issues
+      videoElement.play().catch(error => {
+        console.log(`Autoplay failed for ${producerPeerId} (${track.kind}):`, error.name);
+      });
+      
+      // Set up interval to monitor and prevent track muting
+      const preventMuteInterval = setInterval(() => {
+        if (track.muted && track.readyState === 'live') {
+          console.log(`⚠️ Attempting to unmute ${producerPeerId} video track`);
+          // Try to recreate the stream to fix muting issues
+          if (videoElement.srcObject) {
+            const currentStream = videoElement.srcObject as MediaStream;
+            const newStream = new MediaStream();
+            currentStream.getTracks().forEach(t => newStream.addTrack(t));
+            videoElement.srcObject = newStream;
+          }
+        }
+      }, 1000);
+      
+      // Clean up interval when track ends
+      track.addEventListener('ended', () => {
+        clearInterval(preventMuteInterval);
+      });
+      
       const placeholder = videoElement.parentElement?.querySelector('.video-placeholder') as HTMLDivElement;
       if (placeholder) {
         placeholder.style.display = 'none';
@@ -450,6 +497,8 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
   }, []);
 
   const consumeMedia = useCallback(async (producerPeerId: string, kind: 'video' | 'audio', roomId: string, peerId: string) => {
+    console.log(`🔥 consumeMedia called: ${peerId} trying to consume ${kind} from ${producerPeerId}`);
+    
     // Wait for device to be available if not immediately ready
     let deviceToUse = device || deviceRef.current;
     let retryCount = 0;
@@ -476,8 +525,15 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
       // Get or create transport for this producer peer
       let transport = consumerTransports[producerPeerId];
       if (!transport) {
-        transport = await createRecvTransport(producerPeerId, roomId, peerId);
-        setConsumerTransports(prev => ({ ...prev, [producerPeerId]: transport }));
+        console.log(`Creating consumer transport for ${producerPeerId}...`);
+        try {
+          transport = await createRecvTransport(producerPeerId, roomId, peerId);
+          setConsumerTransports(prev => ({ ...prev, [producerPeerId]: transport }));
+          console.log(`Consumer transport created for ${producerPeerId}`);
+        } catch (transportError) {
+          console.error(`Failed to create consumer transport for ${producerPeerId}:`, transportError);
+          throw transportError;
+        }
       }
 
       // Consume media
@@ -502,11 +558,18 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
               rtpParameters: params.rtpParameters,
             });
 
-            const { track } = consumer;
-            createOrUpdateRemoteMediaElement(producerPeerId, track);
+            console.log(`Consumer created for ${producerPeerId} (${kind}): paused=${consumer.paused}`);
 
-            // Resume consumer
+            const { track } = consumer;
+            console.log(`Track created for ${producerPeerId} (${kind}): enabled=${track.enabled}, muted=${track.muted}, readyState=${track.readyState}`);
+            
+            // Resume consumer BEFORE creating media element to prevent muting
             socket.emit('resumePausedConsumer', { roomId, peerId, producerPeerId, kind });
+            
+            // Wait a bit for the resume to take effect
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+            createOrUpdateRemoteMediaElement(producerPeerId, track);
             
             resolve();
           } catch (error) {
@@ -515,7 +578,15 @@ export const useMediasoup = (socket: Socket | null): UseMediasoupReturn => {
         });
       });
     } catch (error) {
-      console.error('Error consuming media:', error);
+      // Check if this is an expected error due to cleanup
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (errorMessage.includes('Consumer transport not found') || 
+          errorMessage.includes('Producer for') || 
+          errorMessage.includes('not found or closed')) {
+        console.log(`Skipping consumption from ${producerPeerId} (${kind}): peer likely left room`);
+      } else {
+        console.error('Error consuming media:', error);
+      }
     }
   }, [socket, device, consumerTransports, createRecvTransport, createOrUpdateRemoteMediaElement]);
 

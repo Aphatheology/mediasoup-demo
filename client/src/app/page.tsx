@@ -10,7 +10,7 @@ export default function Home() {
   const webrtcSetupCompleted = useRef(false);
   
   const { socket, isConnected } = useSocket();
-  const { roomId, peerId, isJoined, remotePeers, setRoomId, setPeerId, joinRoom } = useRoom(socket);
+  const { roomId, peerId, isJoined, remotePeers, setRoomId, setPeerId, joinRoom, leaveRoom } = useRoom(socket);
   
   const {
     device,
@@ -32,7 +32,8 @@ export default function Home() {
     videoRef, 
     initializeMedia, 
     toggleVideo, 
-    toggleAudio 
+    toggleAudio,
+    cleanupMedia 
   } = useMediaStream({ socket, roomId, peerId, producers });
 
   // Auto-initialize media when component mounts
@@ -240,6 +241,21 @@ export default function Home() {
           >
             {audioMuted ? '🎤 Unmute' : '🎤 Mute'}
           </button>
+          {isJoined && (
+            <button 
+              onClick={() => leaveRoom(cleanupMedia)}
+              style={{
+                padding: '8px 16px',
+                backgroundColor: '#dc3545',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer'
+              }}
+            >
+              🚪 Leave Room
+            </button>
+          )}
         </div>
       </div>
 

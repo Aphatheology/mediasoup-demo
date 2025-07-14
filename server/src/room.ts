@@ -144,15 +144,21 @@ export const getExistingProducers = (roomId: string, excludePeerId: string) => {
 
   room.peers.forEach((peer, id) => {
     if (id !== excludePeerId) {
-      if (peer.producers.video) {
+      // Only include producers that are not closed
+      if (peer.producers.video && !peer.producers.video.closed) {
         producers.push({ peerId: id, kind: 'video' });
+      } else if (peer.producers.video) {
+        console.log(`Skipping closed video producer for peer ${id}`);
       }
-      if (peer.producers.audio) {
+      if (peer.producers.audio && !peer.producers.audio.closed) {
         producers.push({ peerId: id, kind: 'audio' });
+      } else if (peer.producers.audio) {
+        console.log(`Skipping closed audio producer for peer ${id}`);
       }
     }
   });
 
+  console.log(`getExistingProducers for room ${roomId}, excluding ${excludePeerId}: returning ${producers.length} active producers`);
   return producers;
 };
 

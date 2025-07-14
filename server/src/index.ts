@@ -85,7 +85,7 @@ const runMediasoupWorkers = async (): Promise<void> => {
     setInterval(async () => {
       try {
         const usage = await worker.getResourceUsage();
-        console.log(`Worker ${i} resource usage [pid:${worker.pid}]:`, usage);
+        // console.log(`Worker ${i} resource usage [pid:${worker.pid}]:`, usage);
       } catch (error) {
         console.error(`Error getting worker ${i} usage:`, error);
       }

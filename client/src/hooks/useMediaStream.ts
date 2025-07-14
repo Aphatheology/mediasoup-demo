@@ -25,6 +25,7 @@ interface UseMediaStreamReturn {
   initializeMedia: () => Promise<void>;
   toggleVideo: () => Promise<void>;
   toggleAudio: () => void;
+  cleanupMedia: () => void;
 }
 
 interface UseMediaStreamProps {
@@ -142,6 +143,40 @@ export const useMediaStream = ({ socket, roomId, peerId, producers }: UseMediaSt
     }
   }, [currentStream, audioMuted, socket, roomId, peerId, producers]);
 
+  const cleanupMedia = useCallback(() => {
+    if (currentStream) {
+      // Stop all tracks
+      currentStream.getTracks().forEach(track => track.stop());
+      setCurrentStream(null);
+    }
+    
+    // Clear video element
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+    }
+    
+    // Reset state
+    setMediaInitialized(false);
+    setVideoMuted(false);
+    setAudioMuted(false);
+    setParams({
+      video: {
+        encoding: [
+          { rid: 'r0', maxBitrate: 100000, scalabilityMode: 'S1T3' },
+          { rid: 'r1', maxBitrate: 300000, scalabilityMode: 'S1T3' },
+          { rid: 'r2', maxBitrate: 900000, scalabilityMode: 'S1T3' },
+        ],
+        codecOptions: { videoGoogleStartBitrate: 1000 },
+        track: null,
+      },
+      audio: {
+        track: null,
+      },
+    });
+    
+    console.log('Media cleaned up successfully');
+  }, [currentStream]);
+
   return {
     params,
     currentStream,
@@ -152,5 +187,6 @@ export const useMediaStream = ({ socket, roomId, peerId, producers }: UseMediaSt
     initializeMedia,
     toggleVideo,
     toggleAudio,
+    cleanupMedia,
   };
 };

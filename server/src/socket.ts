@@ -65,7 +65,10 @@ export const setupSocketHandlers = (
       const room = getRoom(roomId);
       const peer = room?.peers.get(peerId);
 
+      console.log(`createTransport request: sender=${sender}, roomId=${roomId}, peerId=${peerId}, producerPeerId=${producerPeerId}`);
+
       if (!room || !peer) {
+        console.log(`Transport creation failed: room=${!!room}, peer=${!!peer}`);
         callback({ params: { error: "Room or peer not found" } });
         return;
       }
@@ -80,6 +83,24 @@ export const setupSocketHandlers = (
       } else {
         // Create consumer transport
         const transportKey = producerPeerId;
+        
+        // Check if producer peer exists and has active producers
+        const producerPeer = room.peers.get(producerPeerId!);
+        if (!producerPeer) {
+          console.log(`Producer peer ${producerPeerId} not found in room`);
+          callback({ params: { error: `Producer peer ${producerPeerId} not found` } });
+          return;
+        }
+        
+        const hasActiveProducers = (producerPeer.producers.video && !producerPeer.producers.video.closed) || 
+                                   (producerPeer.producers.audio && !producerPeer.producers.audio.closed);
+        
+        if (!hasActiveProducers) {
+          console.log(`Producer peer ${producerPeerId} has no active producers`);
+          callback({ params: { error: `Producer peer ${producerPeerId} has no active producers` } });
+          return;
+        }
+
         const transport = await createWebRtcTransport(room.router, callback);
         if (transport && producerPeerId) {
           peer.consumerTransports.set(transportKey, transport);
@@ -139,7 +160,13 @@ export const setupSocketHandlers = (
         console.log(`Notified room about new ${kind} producer from ${peerId}`);
       }, 500);
 
-      console.log(`Producer created for peer ${peerId}, kind: ${kind}`);
+      console.log(`Producer created for peer ${peerId}, kind: ${kind}, paused: ${producer.paused}`);
+      
+      // Ensure video producers are not paused
+      if (kind === 'video' && producer.paused) {
+        await producer.resume();
+        console.log(`Video producer resumed for peer ${peerId}`);
+      }
     } catch (error: unknown) {
       console.error("Error creating producer:", error);
       callback({ error: error instanceof Error ? error.message : String(error) });
@@ -184,8 +211,8 @@ export const setupSocketHandlers = (
 
     const producer = kind === 'video' ? producerPeer.producers.video : producerPeer.producers.audio;
 
-    if (!producer) {
-      callback({ params: { error: `Producer for ${kind} not found for peer ${producerPeerId}` } });
+    if (!producer || producer.closed) {
+      callback({ params: { error: `Producer for ${kind} not found or closed for peer ${producerPeerId}` } });
       return;
     }
 
@@ -334,6 +361,28 @@ export const setupSocketHandlers = (
           console.log(`Consumer resumed for peer ${peerId} consuming ${kind} from ${producerPeerId}`);
         }
       }
+    }
+  });
+
+  // Handle explicit leave room
+  socket.on("leave-room", ({ roomId, peerId }) => {
+    console.log(`Peer ${peerId} explicitly leaving room ${roomId}`);
+    
+    if (currentRoomId && currentPeer) {
+      // Notify other peers
+      socket.to(roomId).emit("peer-left", { peerId });
+      
+      // Leave socket room
+      socket.leave(roomId);
+      
+      // Remove peer from room
+      removePeerFromRoom(roomId, peerId);
+      
+      // Reset current state
+      currentRoomId = null;
+      currentPeer = null;
+      
+      console.log(`Peer ${peerId} left room ${roomId}`);
     }
   });
 
